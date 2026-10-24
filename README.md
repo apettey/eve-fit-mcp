@@ -20,6 +20,7 @@ that one file.
 | `eve_fit_mcp/pilots.py` | Skill sets: built-in All 0-5, custom levels, ESI snapshots |
 | `eve_fit_mcp/esi.py` | EVE SSO login, skill and in-game fitting import ([docs/ESI.md](docs/ESI.md)) |
 | `eve_fit_mcp/ships.py` | Hull reference data (slots, attributes, bonuses) |
+| `eve_fit_mcp/items.py` | Tagged item index, filtered search, full item attributes |
 | `eve_fit_mcp/optimizer.py` | Weighted objective, hard constraints, greedy or exhaustive search |
 | `eve_fit_mcp/server.py` | MCP tools |
 | `fits/` | Your EFT library (`save_fit` / `load_saved_fit`) |
@@ -57,6 +58,7 @@ commit command. If the tests fail after an update, the fix almost always goes in
 - **Fits:** `load_fit`, `get_fit`, `get_stats`, `list_fits`, `clone_fit`, `close_fit`, `compare_fits`, `set_fit_options` (pilot, damage profile, command links)
 - **Editing:** `set_module`, `set_charge`, `set_drones`. Each returns the stat changes.
 - **Items:** `search_items`, `list_candidates`, `try_candidates` (what-if for every candidate in a slot, without changing the fit), `get_ship_info` (slots, hardpoints, attributes, bonuses; base and with skills)
+- **Item database:** `find_items` (filter by name, category, group, slot, size, hardpoint, meta, market path, role tags, `fits_ship`, `charge_for`, attribute ranges; sort by any attribute), `get_item_info` (all attributes, variations, charges, skills; or a fitted module's modified values), `list_item_tags`, `list_item_groups`
 - **Pilots:** `list_pilots`, `get_pilot`, `save_pilot` (base level + per-skill overrides), `delete_pilot`
 - **Boosts:** `list_command_links`; apply with `command_links` on `load_fit` / `set_fit_options`
 - **ESI:** `esi_app_info`, `esi_login`, `esi_login_status`, `esi_login_complete`, `esi_refresh_skills`, `esi_list_fittings`, `esi_import_fitting`, `esi_logout`
@@ -86,6 +88,29 @@ commit command. If the tests fail after an update, the fix almost always goes in
   within `max_evals`, then polishes the result with greedy.
 - The original fit is never modified. The result is loaded as a new `fit_id` you can inspect, tweak and
   re-optimise.
+
+## Item database and tags
+
+On first start the server indexes every published module, rig, charge, drone, implant, booster and ship
+(about 7,000 items) from Pyfa's data and caches it in `data/item_index.json`. It rebuilds automatically when
+the game data changes. Each entry has a slot, size, meta group, fitting cost, market path and **role tags**
+derived from CCP's groups, market tree and dogma effects, for example:
+
+| Tag | Meaning |
+|---|---|
+| `damage`, `turret-damage`, `missile-damage`, `drone-damage` | damage modules and rigs |
+| `turret-range`, `turret-tracking`, `application` | weapon application |
+| `speed`, `agility`, `propulsion`, `warp-speed` | navigation |
+| `tank:armor-buffer`, `tank:shield-active`, `tank:resist`, ... | tank style |
+| `tackle`, `point`, `web`, `ewar:damp`, `cap-warfare`, `neut` | combat utility |
+| `fitting`, `cpu`, `powergrid`, `cap` | resources |
+| `drawback:armor-hp`, `drawback:sig-rad`, ... | rig penalties |
+| `ammo:long-range`, `ammo:short-range`, `dmg:mostly-thermal`, ... | ammo profile |
+
+So "low-slot speed modules a Hurricane can fit" is
+`find_items(slot="low", tags=["speed"], fits_ship="Hurricane")`, and "720mm ammo by range" is
+`find_items(charge_for="720mm Howitzer Artillery II", sort_by="weaponRangeMultiplier")`.
+Tags are heuristics. Confirm with `get_item_info` or `try_candidates`.
 
 ## Pilots, skills and boosts
 

@@ -20,6 +20,10 @@ METRICS = {
     "dps_weapon": "Weapon DPS",
     "dps_drone": "Drone DPS",
     "volley": "Alpha strike damage",
+    "weapon_optimal": "Optimal range m (turrets) / max range (missiles); shortest weapon",
+    "weapon_falloff": "Falloff m (turrets); shortest weapon",
+    "weapon_reach": "Optimal + falloff m - a good kiting-range proxy",
+    "weapon_tracking": "Turret tracking rad/s; lowest weapon",
     "ehp_total": "Effective HP against the fit's damage profile",
     "ehp_shield": "Shield EHP", "ehp_armor": "Armor EHP", "ehp_hull": "Hull EHP",
     "hp_total": "Raw HP",
@@ -64,6 +68,22 @@ def compute(handle, skills_check=False):
         s["dps_weapon"] = float(fit.getWeaponDps().total)
         s["dps_drone"] = float(fit.getDroneDps().total)
         s["volley"] = float(fit.getTotalVolley().total)
+
+        # Weapon reach: worst (shortest) across fitted damage-dealing turrets/launchers
+        optimal, falloff, tracking = [], [], []
+        for mod in fit.modules:
+            if mod.isEmpty or mod.hardpoint not in (P.FittingHardpoint.TURRET, P.FittingHardpoint.MISSILE):
+                continue
+            if mod.getDps().total <= 0:
+                continue
+            optimal.append(float(mod.maxRange or 0))
+            falloff.append(float(mod.falloff or 0))
+            if mod.hardpoint == P.FittingHardpoint.TURRET:
+                tracking.append(float(mod.getModifiedItemAttr("trackingSpeed") or 0))
+        s["weapon_optimal"] = min(optimal) if optimal else 0.0
+        s["weapon_falloff"] = min(falloff) if falloff else 0.0
+        s["weapon_reach"] = s["weapon_optimal"] + s["weapon_falloff"]
+        s["weapon_tracking"] = min(tracking) if tracking else 0.0
 
         # Defense
         ehp = fit.ehp or {k: 0.0 for k in LAYERS}
@@ -154,18 +174,23 @@ def compute(handle, skills_check=False):
 ROUND_SKIP = {"cap_lasts_s"}
 
 
-def summarize(stats, keys=None):
-    """Compact view for chat: rounded numbers, the most useful metrics first."""
-    default = ["dps_total", "volley", "ehp_total", "tank_sustained", "cap_stable", "cap_stable_pct", "cap_lasts_s",
-               "max_speed", "align_time", "signature", "lock_range", "scan_res",
-               "cpu_used", "cpu_total", "pg_used", "pg_total", "calibration_used", "calibration_total"]
+DEFAULT_KEYS = [
+    "dps_total", "volley", "weapon_optimal", "weapon_falloff", "ehp_total", "tank_sustained",
+    "cap_stable", "cap_stable_pct", "cap_lasts_s", "max_speed", "align_time", "signature", "lock_range",
+    "scan_res", "cpu_used", "cpu_total", "pg_used", "pg_total", "calibration_used", "calibration_total"]
+
+
+def summarize(stats, keys=None, extra=None):
+    """Compact view for chat: rounded numbers, the most useful metrics first.
+    keys replaces the default metric list; extra appends to it."""
+    default = list(dict.fromkeys(list(keys or DEFAULT_KEYS) + list(extra or ())))
     out = {"ship": stats["ship"], "name": stats["name"], "pilot": stats["pilot"], "valid": stats["valid"],
            "issues": stats["issues"]}
     if stats.get("command_links"):
         out["command_links"] = stats["command_links"]
     if "missing_skills" in stats:
         out["missing_skills"] = stats["missing_skills"]
-    for k in keys or default:
+    for k in default:
         v = stats.get(k)
         if isinstance(v, float):
             v = round(v, 3 if abs(v) < 10 else 1)

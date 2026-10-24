@@ -216,9 +216,7 @@ def optimize(handle, objective, constraints=None, slots="all", mode="variants", 
             "score": final_score[1],
             "start_score": start_score[1],
             "start_feasible": start_score[0] == 1,
-            "stats": stats_mod.summarize(final_stats, list(dict.fromkeys(
-                list(scorer.objective) + list(scorer.constraints) + ["dps_total", "ehp_total", "cpu_used",
-                                                                     "cpu_total", "pg_used", "pg_total"]))),
+            "stats": stats_mod.summarize(final_stats, extra=list(scorer.objective) + list(scorer.constraints)),
             "baseline": stats_mod.summarize(baseline, list(dict.fromkeys(
                 list(scorer.objective) + list(scorer.constraints)))),
             "changes": log,

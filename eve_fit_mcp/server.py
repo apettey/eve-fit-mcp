@@ -10,7 +10,7 @@ import sys
 
 from mcp.server.mcpserver import MCPServer
 
-from . import catalog, esi, optimizer, pilots, ships, stats as stats_mod
+from . import catalog, esi, items, optimizer, pilots, ships, stats as stats_mod
 from .fitting import FitError, FitHandle
 from .pyfa_bridge import ROOT, boot, on_engine
 
@@ -28,6 +28,8 @@ INSTRUCTIONS = """\
 EVE Online fitting engine (Pyfa). Typical loop:
 1. load_fit with EFT text (or load_saved_fit) -> fit_id.
 2. get_stats / get_fit to inspect; list_candidates + try_candidates for what-if comparisons.
+   find_items (filters: slot, size, meta, tags, fits_ship, attributes, sort) and get_item_info
+   to discover modules/ammo; tags hint at roles (list_item_tags).
 3. set_module / set_charge / set_drones for manual edits; clone_fit to branch ideas.
 4. optimize_fit with an objective (metric weights) and constraints for automated search;
    the result is loaded as a new fit_id - inspect it, tweak, re-optimise with different pools.
@@ -283,6 +285,63 @@ def try_candidates(fit_id: int, slot: str, items: list[str] | None = None, mode:
 
 
 @_tool
+def find_items(query: str | None = None, category: str | None = None, group: str | None = None,
+               slot: str | None = None, size: str | None = None, hardpoint: str | None = None,
+               meta_groups: list[str] | None = None, tags: list[str] | None = None,
+               any_tags: list[str] | None = None, market: str | None = None, fits_ship: str | None = None,
+               charge_for: str | None = None, attributes: dict | None = None, sort_by: str | None = None,
+               descending: bool = True, include_attributes: list[str] | None = None,
+               usable_by: str | None = None, limit: int = 30) -> dict:
+    """Search the item database with filters. Text filters are case-insensitive substrings.
+
+    query: words in the name. category: Module/Charge/Drone/Implant/Subsystem/Fighter/Ship.
+    slot: high/med/low/rig/subsystem. size: small/medium/large/xl/capital. hardpoint: turret/launcher.
+    meta_groups: e.g. ["Tech II", "Faction"]. market: substring of the market path (e.g. "Microwarpdrives").
+    tags: role hints that must all match, e.g. ["speed"], ["tackle", "point"], ["ammo:long-range"];
+        any_tags: at least one. See list_item_tags for the vocabulary.
+    fits_ship: only items that ship can fit (slots, hardpoints, rig size, restrictions).
+    charge_for: only charges/scripts that module can load.
+    attributes: dogma filters by name or display name, e.g. {"cpu": {"max": 30}, "Damage Modifier": {"min": 1.1}}.
+    sort_by: attribute (e.g. "damageMultiplier", "maxVelocity") or cpu/pg/meta_level/name.
+    include_attributes: extra attribute values to return per item. usable_by: pilot - only items they can use.
+    Returns {total, returned, items}; each item has slot/size/meta/cpu/pg/tags/market_path."""
+    return items.find(query, category, group, slot, size, hardpoint, meta_groups, tags, any_tags, market,
+                      fits_ship, charge_for, attributes, sort_by, descending, include_attributes, usable_by, limit)
+
+
+@_tool
+def get_item_info(item: str | None = None, fit_id: int | None = None, slot: str | None = None,
+                  attributes: str = "published") -> dict:
+    """Everything about an item: category/group/market path, slot, size, meta, tags, required skills,
+    description, variations (T1/T2/faction...), loadable charge groups and its dogma attributes
+    (display name, value, unit). attributes: published (default) | all | none.
+    Or pass fit_id + slot (e.g. 'high:0') to inspect the fitted module: attributes then also show
+    'fitted' values after skills, ship bonuses and other modules, plus the loaded charge."""
+    module = None
+    if fit_id is not None and slot:
+        h = _get(fit_id)
+        _, module = h._resolve(slot)
+        if module.isEmpty:
+            raise FitError("%s is empty" % slot)
+        item = module.baseItem.typeName if module.isMutated else module.item.typeName
+    if not item:
+        raise FitError("give an item name, or fit_id + slot")
+    return items.item_info(item, attributes, module)
+
+
+@_tool
+def list_item_tags(category: str | None = None) -> dict:
+    """Tag vocabulary for find_items (with item counts), optionally for one category."""
+    return {"tags": items.tag_counts(category)}
+
+
+@_tool
+def list_item_groups(category: str | None = None, query: str | None = None) -> dict:
+    """Item groups with counts (e.g. category='Module', query='Shield'), for browsing."""
+    return {"groups": items.list_groups(category, query)}
+
+
+@_tool
 def get_ship_info(ship: str, pilot: str = "All 5", all_attributes: bool = False) -> dict:
     """Hull reference: slots, hardpoints, fitting resources, HP/resists, cap, navigation, targeting,
     drone/cargo capacity, bonuses text and required skills. Values show base and with the pilot's skills.
@@ -481,6 +540,7 @@ def esi_logout(pilot: str) -> dict:
 def main():
     with contextlib.redirect_stdout(sys.stderr):
         on_engine(boot)  # pay the startup cost (and any DB rebuild) before serving
+        on_engine(items.index)  # tagged item index: built once per game-data version, then cached
     mcp.run("stdio")
 
 
