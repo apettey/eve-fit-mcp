@@ -6,3 +6,5 @@ __pycache__/
 data/
 # per-machine MCP registration (see README)
 .mcp.json
+# your personal fit library and skill plans (save_fit writes here)
+fits/
