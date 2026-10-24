@@ -22,6 +22,7 @@ numbers, clear trade-offs and files they can import. Never guess numbers. Measur
 | Stats | `load_fit` → `get_stats` (full stats incl. `*_noprop`, `ehp_vs_*`, `weapon_groups`), or `evaluate_fit` |
 | Application | `applied_dps` (structure / cruiser_mwd / frigate… at distances); `compare_charges` for ammo |
 | Ammo per enemy | `recommend_ammo` (best applied per target and range), `load_best_ammo` (loads it and writes the intent to the fit notes) |
+| Fleet vs fleet | `fleet_battle` (logi, ECM, tackle, focus fire, best kill order, per range) |
 | Beat a doctrine | `save_doctrine` / `analyze_doctrine` (their comp: roles, reps, reach, tackle, holes); `matchup_vs_doctrine`, `matchup_envelope` (where you win), `matchup_fits` (TTK both ways, N vs M); `sweep_fit` goal `"matchup:<enemy fit_id>@<km>": "max"` (enemy via `load_doctrine_ship`) |
 | Small search | `sweep_fit` (exhaustive → Pareto front; goals can be `applied:structure@60`, `*_noprop`) |
 | Big search | `optimize_fit` (weighted greedy), then polish with `sweep_fit` |

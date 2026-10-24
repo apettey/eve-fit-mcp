@@ -10,7 +10,7 @@ import sys
 
 from mcp.server.mcpserver import MCPServer
 
-from . import ammo, catalog, doctrines, esi, evaluate, explore, items, matchup, optimizer, pilots, ships, skillplan, stats as stats_mod
+from . import ammo, catalog, doctrines, esi, evaluate, explore, fleet, items, matchup, optimizer, pilots, ships, skillplan, stats as stats_mod
 from .fitting import FitError, FitHandle
 from .pyfa_bridge import ROOT, boot, on_engine
 
@@ -39,7 +39,8 @@ EVE Online fitting engine (Pyfa). Typical loop:
    Ammo follows the enemy: recommend_ammo / load_best_ammo per target (max paper DPS only for big/slow targets;
    state the loaded ammo + intent). matchup_fits / matchup_envelope vs enemy fits (both sides' scram/webs/
    painters modelled); sweep goal "matchup:<enemy fit_id>@<km>". Enemy comps: save_doctrine (eve-esi doctrine
-   bundles from zKill/battle reports pass straight in), analyze_doctrine, matchup_vs_doctrine.
+   bundles from zKill/battle reports pass straight in), analyze_doctrine, matchup_vs_doctrine, and
+   fleet_battle (fleet vs comp: logi, ECM, tackle, focus fire, best kill order per range).
 6. save_fit writes .eft (clipboard import) + .xml (file import; Pyfa mangles .eft files) to fits/.
    skill_plan: minimum training plan for one or more fits (EVEMon .emp export).
 Rules of thumb: start from a valid fit; make must-haves constraints or locked slots, not weights;
@@ -473,6 +474,24 @@ def matchup_vs_doctrine(fit_id: int, doctrine: str, distances_km: list[float] | 
                     "we_win_at_km": env["we_win_at_km"], "they_win_at_km": env["they_win_at_km"],
                     "advice": env["advice"], "by_distance": env["by_distance"]})
     return {"doctrine": d["name"], "vs": out, "assumptions": matchup.ASSUMPTIONS}
+
+
+@_tool
+def fleet_battle(our_fleet: list[dict] | str, enemy: str | list[dict], distances_km: list[float] | None = None,
+                 our_order: str = "compare", their_order: str = "auto", our_links: list[dict] | None = None,
+                 their_links: list[dict] | None = None) -> dict:
+    """Fleet vs fleet with logistics, ECM, tackle and focus fire, as a time-stepped fight.
+
+    our_fleet: [{"fit_id": 3, "count": 10, "label": "Cerberus"}, {"eft": "...", "count": 2}] or a saved
+      doctrine name. enemy: a saved doctrine name (see save_doctrine) or the same list form.
+    Per distance: each ship type's damage applied to each enemy type with the best tackle its fleet has in
+    range; targets' EHP vs the incoming mix plus own tank plus enemy logi reps on whoever is primaried (a logi
+    can't rep itself; jammed logi rep less); ECM jams assigned to the most valuable ships (EVE's jam formula
+    with range falloff). Each side focuses one target at a time and switches off targets it can't break.
+    our_order: "compare" tries auto / logi_first / ewar_first / dps_first / squishiest_first and returns the
+    best. Returns winner, kill timeline, survivors, jams, tackle, target switches, the orders compared and
+    insights (e.g. "kill the Falcon first", "can't break the Basilisks while 2 are alive")."""
+    return fleet.battle(our_fleet, enemy, distances_km or [10], our_order, their_order, our_links, their_links)
 
 
 @_tool

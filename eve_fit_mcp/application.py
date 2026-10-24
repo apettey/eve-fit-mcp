@@ -187,15 +187,20 @@ def tackle_effect(fit, target, distance_km):
             "webs_in_range": webs + (len(web_drones) if in_lock else 0), "painters_in_range": painters}
 
 
-def applied(fit, dmg, target, distance_km, target_angle=90.0, only=None, tackle=True, raw=False):
+def applied(fit, dmg, target, distance_km, target_angle=90.0, only=None, tackle=True, raw=False,
+            speed=None, sig=None):
     """Applied damage of `dmg` (optionally only `only` keys) against a resolved target.
 
     tackle: apply the attacker's scram/webs/painters to the target first. raw=True: return the DmgTypes
-    before the target's resists (for EHP maths); otherwise the total after resists."""
+    before the target's resists (for EHP maths); otherwise the total after resists.
+    speed/sig: explicit target speed/signature (e.g. fleet-wide tackle), overriding both."""
     from graphs.data.fitDamageStats.calc.application import getApplicationPerKey
     from graphs.data.fitDamageStats.getter import applyDamage
     from graphs.wrapper import SourceWrapper
-    speed, sig = target["speed"], target["sig"]
+    if speed is not None and sig is not None:
+        tackle = False
+    else:
+        speed, sig = target["speed"], target["sig"]
     if tackle:
         t = tackle_effect(fit, target, distance_km)
         speed, sig = t["speed"], t["sig"]
