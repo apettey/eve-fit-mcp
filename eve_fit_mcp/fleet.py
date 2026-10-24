@@ -1,4 +1,4 @@
-"""Fleet vs fleet: focus fire, logistics, ECM and kill order (phase 2 of doctrine counters).
+"""Fleet vs fleet: focus fire, logistics, ECM, tackle, command bursts, capacitor warfare and smartbombs.
 
 Each side is a list of ship types with counts. For a given engagement distance:
   - damage: every ship type's damage applied to every enemy type (Pyfa graph maths), with the best tackle
@@ -9,16 +9,16 @@ Each side is a list of ship types with counts. For a given engagement distance:
   - ECM: each jammer is assigned to the attacking side's most valuable ship (damage or reps) and jams it
     with EVE's chance formula (strength for the target's sensor type over its sensor strength, with
     range falloff); jammed ships lose that fraction of their output;
+  - command bursts: loaded bursts on a side boost that whole side (fleet_effects);
+  - neuts: assigned to logi first, then cap-dependent damage dealers; when Pyfa's capacitor simulation says a
+    target runs dry it loses every cap-using module (active tank, remote reps, ECM, cap guns);
+  - smartbombs: missiles crossing the defenders' smartbomb fields get popped; orbiting drones die;
   - focus fire: each side shoots one target at a time in a kill order; a time-stepped simulation gives
     the kill timeline, survivors and the winner. Our kill order is chosen by comparing strategies.
-
-Simplifications (returned with every result): all ships at the same distance; everyone in range of their
-own logi; no capacitor, neuts or drones-switching; no command bursts unless passed as generic links;
-EHP against the combined damage mix; jammed ships simply lose output for that fraction of time.
 """
 import math
 
-from . import application, doctrines, stats as stats_mod
+from . import application, doctrines, fleet_effects as fx, stats as stats_mod
 from .errors import FitError
 from .fitting import FitHandle
 from .pyfa_bridge import P, lock
@@ -31,9 +31,11 @@ SENSOR_ATTR = {"Gravimetric": "scanGravimetricStrengthBonus", "Ladar": "scanLada
 
 ASSUMPTIONS = ("all ships at the same distance; each side's best tackle in range applies to its targets; logi "
                "assumed in range of the whole fleet and repping the current primary; ECM assigned to the most "
-               "valuable enemy ships, jam chance from EVE's formula with range falloff; focus fire one target "
-               "at a time; capacitor/neuts not simulated; command bursts only if passed as generic links; "
-               "passive shield regen at 2/3 of peak")
+               "valuable enemy ships, jam chance from EVE's formula with range falloff; loaded command bursts "
+               "boost their whole side (generic-link model: max skills, T2 bursts, hull bonus, no mindlink); "
+               "neuts assigned to logi first, cap-out from Pyfa's cap simulation switches off cap-using modules; "
+               "smartbomb fields cover the defending fleet (missiles popped per pulse, drones die); focus fire "
+               "one target at a time; passive shield regen at 2/3 of peak")
 
 
 class Member:
@@ -53,6 +55,28 @@ class Member:
             if not m.isEmpty and m.item.group.name in ("ECM", "Burst Jammer") and m.state >= P.FittingModuleState.ACTIVE:
                 self.ecm.append({t: float(m.getModifiedItemAttr(a) or 0) for t, a in SENSOR_ATTR.items()} |
                                 {"optimal": float(m.maxRange or 0), "falloff": float(m.falloff or 0)})
+        self.bursts = fx.burst_links(handle)
+        self.neuts = fx.neut_modules(handle)
+        self.smartbombs = fx.smartbomb_modules(handle)
+        self.missile_speed = fx.missile_speed(handle)
+        self.drone_hp = fx.drone_hp(handle)
+        self.cap_dependent = fx.is_cap_dependent(handle)
+        self.missile_keys = {k for k in self.dmg if getattr(k, "hardpoint", None) == P.FittingHardpoint.MISSILE}
+        self.drone_keys = {k for k in self.dmg if hasattr(k, "amountActive")}
+
+    def refresh(self):
+        self.__init__(self.label, self.h, self.count, self.fit_known)
+
+
+def apply_side_bursts(members, explicit_links=None):
+    """Explicit links, else the strongest of each burst any member carries, applied to the whole side."""
+    links = explicit_links if explicit_links is not None else fx.merge_links(m.bursts for m in members)
+    if links:
+        for m in members:
+            if m.h.command_links != links:
+                m.h.set_command_links(links)
+                m.refresh()
+    return links
 
 
 def _members(side, pilot, links):
@@ -75,10 +99,7 @@ def _members(side, pilot, links):
             else:
                 raise FitError("each fleet entry needs fit_id or eft")
             out.append(Member(spec.get("label") or "%s #%d" % (h.ship, i + 1), h, spec.get("count", 1)))
-    if links:
-        for m in out:
-            m.h.set_command_links(links)
-            m.__init__(m.label, m.h, m.count, m.fit_known)
+    apply_side_bursts(out, links)
     return out
 
 
@@ -92,11 +113,10 @@ def _target_of(member):
 
 
 def _pair_tables(attackers, defenders, dist):
-    """raw[a][d]: raw applied DmgTypes of one `a` on one `d`; plus per-defender EHP/HP/tank vs the mix.
-    dist in metres (application helpers take km)."""
+    """Damage of one `a` on one `d` (split into missile / drone / other), per-defender EHP/HP/tank vs the
+    incoming mix, tackle, and each defender's capped-out numbers. dist in metres."""
     km = dist / 1000.0
-    raw = {}
-    tackle = {}
+    raw, parts, tackle = {}, {}, {}
     for d in defenders:
         tgt = _target_of(d)
         best_speed, best_sig, scrammed, webs = tgt["speed"], tgt["sig"], False, 0
@@ -108,9 +128,17 @@ def _pair_tables(attackers, defenders, dist):
         tackle[d.label] = {"speed": round(best_speed, 1), "sig": round(best_sig, 1), "scrammed": scrammed,
                            "webs": webs}
         for a in attackers:
-            raw[(a.label, d.label)] = application.applied(a.h.fit, a.dmg, tgt, km, raw=True,
-                                                          speed=best_speed, sig=best_sig) if a.dmg else None
-    ehp, hp, tank = {}, {}, {}
+            if not a.dmg:
+                raw[(a.label, d.label)] = None
+                continue
+            r = application.applied(a.h.fit, a.dmg, tgt, km, raw=True, speed=best_speed, sig=best_sig)
+            raw[(a.label, d.label)] = r
+            mis = application.applied(a.h.fit, a.dmg, tgt, km, raw=True, speed=best_speed, sig=best_sig,
+                                      only=a.missile_keys).total if a.missile_keys else 0.0
+            dro = application.applied(a.h.fit, a.dmg, tgt, km, raw=True, speed=best_speed, sig=best_sig,
+                                      only=a.drone_keys).total if a.drone_keys else 0.0
+            parts[(a.label, d.label)] = {"missile": mis, "drone": dro, "other": max(0.0, r.total - mis - dro)}
+    ehp, hp, tank, capless = {}, {}, {}, {}
     for d in defenders:
         mix = [0.0, 0.0, 0.0, 0.0]
         for a in attackers:
@@ -125,7 +153,20 @@ def _pair_tables(attackers, defenders, dist):
         d.h.set_damage_profile(saved)
         ehp[d.label], hp[d.label] = s["ehp_total"], max(s["hp_total"], 1.0)
         tank[d.label] = max(0.0, s["tank_sustained"] - s["shield_regen"] / 3.0)
-    return raw, ehp, hp, tank, tackle
+        if d.cap_dependent:
+            c = fx.capless_clone(d.h)
+            try:
+                if sum(mix) > 0:
+                    c.set_damage_profile(mix)
+                cs = stats_mod.compute(c)
+                paper_c = sum(v.total for v in application.damage_map(c.fit).values())
+                capless[d.label] = {"ehp": cs["ehp_total"], "hp": max(cs["hp_total"], 1.0),
+                                    "tank": max(0.0, cs["tank_sustained"] - cs["shield_regen"] / 3.0),
+                                    "rr": float(cs["remote_rep"]),
+                                    "dmg_factor": paper_c / d.paper if d.paper else 1.0}
+            finally:
+                c.close()
+    return raw, parts, ehp, hp, tank, tackle, capless
 
 
 def _range_factor(opt, falloff, dist):
@@ -133,11 +174,12 @@ def _range_factor(opt, falloff, dist):
     return calculateRangeFactor(srcOptimalRange=opt, srcFalloffRange=falloff, distance=dist)
 
 
-def _jams(jammers, victims, alive, dist):
+def _jams(jammers, victims, alive, dist, capped=frozenset()):
     """Assign alive jammer modules to the most valuable alive victims; return {victim instance: jam prob}."""
     instances = sorted(((v, i) for v in victims for i in range(v.count) if alive[(v.label, i)]),
                        key=lambda vi: -(vi[0].paper + 2 * vi[0].rr))
-    mods = [mod for j in jammers for i in range(j.count) if alive[(j.label, i)] for mod in j.ecm]
+    mods = [mod for j in jammers for i in range(j.count)
+            if alive[(j.label, i)] and (j.label, i) not in capped for mod in j.ecm]
     keep = {}
     for k, mod in enumerate(mods):
         if not instances:
@@ -147,6 +189,23 @@ def _jams(jammers, victims, alive, dist):
                                                                                               mod["falloff"], dist)
         keep[(v.label, i)] = keep.get((v.label, i), 1.0) * (1 - min(1.0, strength / v.sensor))
     return {key: 1 - p for key, p in keep.items()}
+
+
+def _neut_targets(neuters, victims, alive, capped):
+    """Neut modules of alive, un-capped attackers assigned round-robin to the victims' logi first, then the
+    most valuable cap-dependent ships. Returns {victim instance: [neut dicts]}."""
+    instances = sorted(((v, i) for v in victims for i in range(v.count)
+                        if alive[(v.label, i)] and (v.label, i) not in capped and v.cap_dependent),
+                       key=lambda vi: (0 if vi[0].rr > 0 else 1, -vi[0].paper))
+    mods = [n for a in neuters for i in range(a.count)
+            if alive[(a.label, i)] and (a.label, i) not in capped for n in a.neuts]
+    out = {}
+    for k, n in enumerate(mods):
+        if not instances:
+            break
+        v, i = instances[k % len(instances)]
+        out.setdefault((v.label, i), []).append(n)
+    return out
 
 
 def _order(strategy, our, their, raw, ehp, hp, tank, alive_their, our_dps_on):
@@ -169,57 +228,102 @@ def _order(strategy, our, their, raw, ehp, hp, tank, alive_their, our_dps_on):
         key = ttk
     else:  # auto: most threat removed per second of shooting
         def key(m):
-            threat = m.paper + 1.5 * m.rr * (ehp[m.label] / hp[m.label]) + 400 * len(m.ecm)
+            threat = m.paper + 1.5 * m.rr * (ehp[m.label] / hp[m.label]) + 400 * len(m.ecm) + 300 * len(m.neuts)
             t = ttk(m)
             return -(threat / t) if t < math.inf else math.inf
     return sorted(alive_types, key=key)
 
 
 def tables(our, their, dist):
-    """Both directions' pair tables (damage, EHP, tank, tackle) - reusable across kill orders."""
+    """Both directions' pair tables - reusable across kill orders."""
     return _pair_tables(our, their, dist), _pair_tables(their, our, dist)
 
 
 def simulate(our, their, dist, our_strategy="auto", their_strategy="auto", precomputed=None):
-    (raw_us, ehp_t, hp_t, tank_t, tackle_t), (raw_them, ehp_u, hp_u, tank_u, tackle_u) =         precomputed or tables(our, their, dist)
+    (raw_us, parts_us, ehp_t, hp_t, tank_t, tackle_t, capless_t), \
+        (raw_them, parts_them, ehp_u, hp_u, tank_u, tackle_u, capless_u) = precomputed or tables(our, their, dist)
+    side_members = {"us": our, "them": their}
+    capless = {**capless_t, **capless_u}
     alive = {(m.label, i): True for side in (our, their) for m in side for i in range(m.count)}
     left = {(m.label, i): ehp_t[m.label] for m in their for i in range(m.count)}
     left.update({(m.label, i): ehp_u[m.label] for m in our for i in range(m.count)})
+    cap_left = {k: 1.0 for k in alive}
+    capped = set()
+    cap_cache = {}
     timeline, t = [], 0.0
     switches = {"us": [], "them": []}
     target = {"us": None, "them": None}
 
-    def fleet_dps_on(attackers, raw, defender, jams):
+    def bombs_of(side):
+        return [b for m in side_members[side] for i in range(m.count)
+                if alive[(m.label, i)] and (m.label, i) not in capped for b in m.smartbombs]
+
+    def fleet_dps_on(attackers, parts, defender, jams, defending_bombs):
         total = 0.0
         for a in attackers:
-            r = raw.get((a.label, defender.label))
-            if r is None:
+            p = parts.get((a.label, defender.label))
+            if p is None:
                 continue
+            missile = p["missile"] * fx.missile_survival(dist, a.missile_speed, defending_bombs)
+            drone = p["drone"] if t < fx.drone_lifetime(a.drone_hp, defending_bombs) else 0.0
+            per_ship = missile + drone + p["other"]
             for i in range(a.count):
                 if alive[(a.label, i)]:
-                    total += r.total * (1 - jams.get((a.label, i), 0.0))
+                    factor = capless[a.label]["dmg_factor"] if (a.label, i) in capped else 1.0
+                    total += per_ship * factor * (1 - jams.get((a.label, i), 0.0))
         return total
+
+    def ehp_basis(d, idx, ehp, hp):
+        if (d.label, idx) in capped:
+            return capless[d.label]["ehp"], capless[d.label]["hp"]
+        return ehp[d.label], hp[d.label]
 
     def reps_on(defenders, defender_type, idx, ehp, hp, jams):
         reps = 0.0
         for l in defenders:
-            if l.rr <= 0:
-                continue
             for i in range(l.count):
-                if alive[(l.label, i)] and not (l is defender_type and i == idx):
-                    reps += l.rr * (1 - jams.get((l.label, i), 0.0))
-        return reps * ehp[defender_type.label] / hp[defender_type.label]
+                if not alive[(l.label, i)] or (l is defender_type and i == idx):
+                    continue
+                rr = capless[l.label]["rr"] if (l.label, i) in capped else l.rr
+                reps += rr * (1 - jams.get((l.label, i), 0.0))
+        e, h = ehp_basis(defender_type, idx, ehp, hp)
+        return reps * e / h
+
+    def own_tank(d, idx, tank):
+        return capless[d.label]["tank"] if (d.label, idx) in capped else tank[d.label]
 
     stall = {"us": False, "them": False}
     while t < MAX_T:
-        jams_on_us = _jams(their, our, alive, dist)
-        jams_on_them = _jams(our, their, alive, dist)
+        jams_on_us = _jams(their, our, alive, dist, capped)
+        jams_on_them = _jams(our, their, alive, dist, capped)
+        # capacitor warfare: each side's neuts drain their assigned targets (Pyfa cap sim per assignment)
+        for neuters, victims in ((our, their), (their, our)):
+            for inst, neuts in _neut_targets(neuters, victims, alive, capped).items():
+                key = (inst[0], tuple(sorted(id(n["mod"]) for n in neuts)))
+                if key not in cap_cache:
+                    vm = next(m for m in victims if m.label == inst[0])
+                    cap_cache[key] = fx.cap_out_time(vm.h, neuts, dist)
+                t_out = cap_cache[key]
+                if t_out < math.inf:
+                    cap_left[inst] -= DT / max(t_out, DT)
+                    if cap_left[inst] <= 0 and inst not in capped:
+                        vm = next(m for m in victims if m.label == inst[0])
+                        side = "them" if victims is their else "us"
+                        full_ehp = (ehp_t if side == "them" else ehp_u)[vm.label]
+                        if vm.label in capless:
+                            left[inst] *= capless[vm.label]["ehp"] / full_ehp if full_ehp else 1.0
+                        capped.add(inst)
+                        timeline.append({"t_s": round(t + DT), "side": "us" if side == "them" else "them",
+                                         "capped_out": inst[0], "instance": inst[1] + 1})
         progressed = False
-        for side, atk, dfn, raw, ehp, hp, tank, jams_atk, jams_dfn, strat in (
-                ("us", our, their, raw_us, ehp_t, hp_t, tank_t, jams_on_us, jams_on_them, our_strategy),
-                ("them", their, our, raw_them, ehp_u, hp_u, tank_u, jams_on_them, jams_on_us, their_strategy)):
+        for side, atk, dfn, parts, ehp, hp, tank, jams_atk, jams_dfn, strat, def_side in (
+                ("us", our, their, parts_us, ehp_t, hp_t, tank_t, jams_on_us, jams_on_them, our_strategy, "them"),
+                ("them", their, our, parts_them, ehp_u, hp_u, tank_u, jams_on_them, jams_on_us, their_strategy, "us")):
+            bombs = bombs_of(def_side)
+
             def net_on(m, idx):
-                return fleet_dps_on(atk, raw, m, jams_atk) - tank[m.label] - reps_on(dfn, m, idx, ehp, hp, jams_dfn)
+                return (fleet_dps_on(atk, parts, m, jams_atk, bombs) - own_tank(m, idx, tank)
+                        - reps_on(dfn, m, idx, ehp, hp, jams_dfn))
 
             cur = target[side]
             cur_type = next((m for m in dfn if cur and m.label == cur[0]), None)
@@ -227,8 +331,8 @@ def simulate(our, their, dist, our_strategy="auto", their_strategy="auto", preco
                 # pick the first target in kill order we can actually break (an FC switches off a target
                 # whose tank + reps out-heal the fleet)
                 chosen = None
-                for m in _order(strat, atk, dfn, raw, ehp, hp, tank, alive,
-                                lambda m: fleet_dps_on(atk, raw, m, jams_atk)):
+                for m in _order(strat, atk, dfn, raw_us if side == "us" else raw_them, ehp, hp, tank, alive,
+                                lambda m: fleet_dps_on(atk, parts, m, jams_atk, bombs)):
                     idx = next(i for i in range(m.count) if alive[(m.label, i)])
                     if net_on(m, idx) > 1e-6:
                         chosen = (m.label, idx)
@@ -241,8 +345,7 @@ def simulate(our, their, dist, our_strategy="auto", their_strategy="auto", preco
                                            "reason": "can't break %s's tank + reps" % cur[0]})
                 target[side] = cur = chosen
                 cur_type = next(m for m in dfn if m.label == cur[0])
-            dtype = cur_type
-            net = net_on(dtype, cur[1])
+            net = net_on(cur_type, cur[1])
             stall[side] = False
             progressed = True
             left[cur] -= net * DT
@@ -264,26 +367,38 @@ def simulate(our, their, dist, our_strategy="auto", their_strategy="auto", preco
 
     ehp_destroyed = {"us": destroyed(our, ehp_u), "them": destroyed(their, ehp_t)}
     us_left, them_left = sum(survivors["us"].values()), sum(survivors["them"].values())
+    kills = [e for e in timeline if "killed" in e]
     if not them_left and us_left:
         winner = "us"
     elif not us_left and them_left:
         winner = "them"
-    elif not timeline or (stall["us"] and stall["them"]):
+    elif not kills or (stall["us"] and stall["them"]):
         winner = "stalemate"
     else:
         frac_us = us_left / sum(m.count for m in our)
         frac_them = them_left / sum(m.count for m in their)
         winner = "us (on points)" if frac_us > frac_them else "them (on points)" if frac_them > frac_us else "even"
     kill_order_used = []
-    for ev in timeline:
+    for ev in kills:
         if ev["side"] == "us" and ev["killed"] not in kill_order_used:
             kill_order_used.append(ev["killed"])
+    no_caps = frozenset()
+    all_alive = {k: True for k in alive}
     return {"winner": winner, "duration_s": round(t), "timeline": timeline, "survivors": survivors,
             "our_kill_order": kill_order_used, "target_switches": switches, "ehp_destroyed": ehp_destroyed,
             "stalled": [s for s, v in stall.items() if v],
             "tackle_on_them": tackle_t, "tackle_on_us": tackle_u,
             "jams_on_us_at_start": {"%s #%d" % (k[0], k[1] + 1): round(v, 2)
-                                    for k, v in _jams(their, our, {k: True for k in alive}, dist).items()},
+                                    for k, v in _jams(their, our, all_alive, dist, no_caps).items()},
+            "capped_out": {"us": sorted({e["capped_out"] for e in timeline if e.get("capped_out") and e["side"] == "them"}),
+                           "them": sorted({e["capped_out"] for e in timeline if e.get("capped_out") and e["side"] == "us"})},
+            "missiles_reaching": {
+                "ours": {a.label: round(fx.missile_survival(dist, a.missile_speed,
+                                                            [b for m in their for b in m.smartbombs * m.count]), 3)
+                         for a in our if a.missile_keys},
+                "theirs": {a.label: round(fx.missile_survival(dist, a.missile_speed,
+                                                              [b for m in our for b in m.smartbombs * m.count]), 3)
+                           for a in their if a.missile_keys}},
             "ehp_vs_incoming": {"us": {k: round(v) for k, v in ehp_u.items()},
                                 "them": {k: round(v) for k, v in ehp_t.items()}}}
 
@@ -291,8 +406,6 @@ def simulate(our, their, dist, our_strategy="auto", their_strategy="auto", preco
 def fleet_score(r, our, their):
     """Scalar outcome for searches: 1 for a win (0.5 on points) + up to 0.2 for a fast win + share of the
     enemy fleet's EHP destroyed - share of ours destroyed (partial damage counts). About -1 .. 2.2."""
-    ours_total = sum(m.count for m in our)
-    theirs_total = sum(m.count for m in their)
     # EHP-weighted, including partial damage, so a close loss outranks a rout (gives searches a gradient)
     killed = r["ehp_destroyed"]["them"]
     lost = r["ehp_destroyed"]["us"]
@@ -335,32 +448,45 @@ class FleetObjective:
 
     def calibrate(self, handle):
         with lock():
-            for d in self.distances:
-                us = self._us(handle)
-                tb = tables(us, self.enemy, d * 1000)
-                runs = {s: simulate(us, self.enemy, d * 1000, s, self.their_order, tb) for s in STRATEGIES}
-                ranked = sorted(runs, key=lambda s: fleet_score(runs[s], us, self.enemy), reverse=True)
-                self.orders[d] = tuple(dict.fromkeys([ranked[0], ranked[1], "auto"]))
+            us, restore = self._us(handle)
+            try:
+                for d in self.distances:
+                    tb = tables(us, self.enemy, d * 1000)
+                    runs = {s: simulate(us, self.enemy, d * 1000, s, self.their_order, tb) for s in STRATEGIES}
+                    ranked = sorted(runs, key=lambda s: fleet_score(runs[s], us, self.enemy), reverse=True)
+                    self.orders[d] = tuple(dict.fromkeys([ranked[0], ranked[1], "auto"]))
+            finally:
+                restore()
         return self.orders
 
     def _us(self, handle):
-        if self.links:
-            handle.set_command_links(self.links)
-        return [Member("candidate", handle, self.count)] + self.support
+        """Our side for one evaluation: the candidate (with side bursts applied temporarily) + support."""
+        saved = list(handle.command_links)
+        cand = Member("candidate", handle, self.count)
+        us = [cand] + self.support
+        apply_side_bursts(us, self.links)
+
+        def restore():
+            if handle.command_links != saved:
+                handle.set_command_links(saved)
+        return us, restore
 
     def __call__(self, handle):
         with lock():
-            us = self._us(handle)
-            per = {}
-            for d in self.distances:
-                best = None
-                tb = tables(us, self.enemy, d * 1000)
-                for order in self.orders[d]:
-                    r = simulate(us, self.enemy, d * 1000, order, self.their_order, tb)
-                    sc = fleet_score(r, us, self.enemy)
-                    if best is None or sc > best[0]:
-                        best = (sc, order, r["winner"])
-                per[d] = best
+            us, restore = self._us(handle)
+            try:
+                per = {}
+                for d in self.distances:
+                    best = None
+                    tb = tables(us, self.enemy, d * 1000)
+                    for order in self.orders[d]:
+                        r = simulate(us, self.enemy, d * 1000, order, self.their_order, tb)
+                        sc = fleet_score(r, us, self.enemy)
+                        if best is None or sc > best[0]:
+                            best = (sc, order, r["winner"])
+                    per[d] = best
+            finally:
+                restore()
             scores = [v[0] for v in per.values()]
             score = max(scores) if self.range_choice == "best" else sum(scores) / len(scores)
             return {"score": score, "by_distance": {"%g" % d: {"score": v[0], "order": v[1], "winner": v[2]}
@@ -402,20 +528,23 @@ def battle(our_side, their_side, distances_km=(10,), our_order="compare", their_
                                "kill_order": r["our_kill_order"]} for s, r in runs.items()}
                 results.append({"distance_km": d, "best_order": best, "result": runs[best],
                                 "orders_compared": summary})
-            sides = {"us": [{"label": m.label, "count": m.count, "role": m.primary, "paper_dps": round(m.paper),
-                             "remote_rep_hp_s": round(m.rr), "sensor": "%s %.1f" % (m.sensor_type, m.sensor),
-                             "jammers": len(m.ecm)} for m in our],
-                     "them": [{"label": m.label, "count": m.count, "role": m.primary, "paper_dps": round(m.paper),
-                               "remote_rep_hp_s": round(m.rr), "sensor": "%s %.1f" % (m.sensor_type, m.sensor),
-                               "jammers": len(m.ecm), "fit_known": m.fit_known} for m in their]}
-            return {"sides": sides, "by_distance": results, "insights": _insights(results, our, their),
+
+            def side_info(members, enemy_side):
+                return [{"label": m.label, "count": m.count, "role": m.primary, "paper_dps": round(m.paper),
+                         "remote_rep_hp_s": round(m.rr), "sensor": "%s %.1f" % (m.sensor_type, m.sensor),
+                         "jammers": len(m.ecm), "neuts": len(m.neuts), "smartbombs": len(m.smartbombs),
+                         "cap_dependent": m.cap_dependent, "fit_known": m.fit_known} for m in members]
+
+            bursts = {"us": our[0].h.command_links if our else [], "them": their[0].h.command_links if their else []}
+            return {"sides": {"us": side_info(our, their), "them": side_info(their, our)}, "command_bursts": bursts,
+                    "by_distance": results, "insights": _insights(results, our, their, bursts),
                     "assumptions": ASSUMPTIONS}
         finally:
             for m in our + their:
                 m.h.close()
 
 
-def _insights(results, our, their):
+def _insights(results, our, their, bursts=None):
     out = []
     wins = [r["distance_km"] for r in results if r["result"]["winner"].startswith("us")]
     losses = [r["distance_km"] for r in results if r["result"]["winner"].startswith("them")]
@@ -423,25 +552,42 @@ def _insights(results, our, their):
         out.append("We win at %s km." % ", ".join("%g" % d for d in wins))
     if losses:
         out.append("We lose at %s km." % ", ".join("%g" % d for d in losses))
+    if bursts:
+        for side, name in (("us", "Our"), ("them", "Their")):
+            if bursts.get(side):
+                out.append("%s command bursts: %s." % (name, ", ".join(
+                    "%s (%d%%/lvl)" % (l["type"], l["strength"]) for l in bursts[side])))
     for r in results:
         res = r["result"]
+        d = r["distance_km"]
         if "us" in res["stalled"]:
             out.append("At %g km we can't break some targets' tank + reps: more DPS, alpha, neuts on logi, "
-                       "or kill the logi first." % r["distance_km"])
+                       "or kill the logi first." % d)
         jams = res["jams_on_us_at_start"]
         if jams:
             worst = max(jams.items(), key=lambda kv: kv[1])
             out.append("At %g km their ECM jams up to %d%% of the time (%s): ECCM/sensor strength or primary "
-                       "the ECM ships." % (r["distance_km"], round(100 * worst[1]), worst[0]))
+                       "the ECM ships." % (d, round(100 * worst[1]), worst[0]))
+        if res["capped_out"]["them"]:
+            out.append("At %g km our neuts cap out their %s (active tank/reps/ECM switch off)."
+                       % (d, ", ".join(res["capped_out"]["them"])))
+        if res["capped_out"]["us"]:
+            out.append("At %g km their neuts cap out our %s - bring cap boosters or kill the neut ships."
+                       % (d, ", ".join(res["capped_out"]["us"])))
+        for who, label in (("ours", "Our"), ("theirs", "Their")):
+            popped = {k: v for k, v in res["missiles_reaching"][who].items() if v < 0.95}
+            if popped:
+                out.append("At %g km smartbombs pop missiles: %s missiles reaching the target - %s." % (
+                    d, label.lower(), ", ".join("%s %d%%" % (k, round(100 * v)) for k, v in popped.items())))
         out.append("At %g km the best kill order is '%s': %s." % (
-            r["distance_km"], r["best_order"], " -> ".join(res["our_kill_order"]) or "no kills"))
+            d, r["best_order"], " -> ".join(res["our_kill_order"]) or "no kills"))
         unbreakable = sorted({sw["from"] for sw in res["target_switches"]["us"]})
         if unbreakable:
             out.append("At %g km we had to switch off %s (their tank + logi reps out-healed our damage)."
-                       % (r["distance_km"], ", ".join(unbreakable)))
+                       % (d, ", ".join(unbreakable)))
         worst = [s for s, v in r["orders_compared"].items() if not v["winner"].startswith("us")]
         if worst and r["result"]["winner"].startswith("us"):
-            out.append("At %g km the kill order matters: %s lose(s)." % (r["distance_km"], ", ".join(worst)))
+            out.append("At %g km the kill order matters: %s lose(s)." % (d, ", ".join(worst)))
     unknown = [m.label for m in their if not m.fit_known]
     if unknown:
         out.append("Enemy fits unknown for %s (bare hulls) - treat their part of the result as a guess."

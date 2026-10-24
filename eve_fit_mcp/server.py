@@ -40,7 +40,7 @@ EVE Online fitting engine (Pyfa). Typical loop:
    state the loaded ammo + intent). matchup_fits / matchup_envelope vs enemy fits (both sides' scram/webs/
    painters modelled); sweep goal "matchup:<enemy fit_id>@<km>". Enemy comps: save_doctrine (eve-esi doctrine
    bundles from zKill/battle reports pass straight in), analyze_doctrine, matchup_vs_doctrine, and
-   fleet_battle (fleet vs comp: logi, ECM, tackle, focus fire, best kill order per range), and
+   fleet_battle (fleet vs comp: logi, ECM, tackle, bursts, neuts, smartbombs, focus fire, best kill order), and
    counter_fit (search a hull's fit to beat a doctrine; before/after battles and trade-off alternatives),
    recommend_comp (how many of which fits to bring, under pilot/skill, role and budget limits).
 6. save_fit writes .eft (clipboard import) + .xml (file import; Pyfa mangles .eft files) to fits/.
@@ -86,6 +86,17 @@ def _get(fit_id):
     if h is None:
         raise FitError("No fit %s loaded; loaded: %s" % (fit_id, sorted(_fits) or "none"))
     return h
+
+
+def _refresh_pilot_fits(name, result):
+    """Recalculate loaded fits flown by this pilot so its new skills show up straight away."""
+    key = pilots.canonical(name).lower()
+    ids = [fid for fid, h in _fits.items() if (h.pilot or "").lower() == key]
+    for fid in ids:
+        _fits[fid].recalc()
+    if isinstance(result, dict):
+        result = dict(result, refreshed_fits=ids)
+    return result
 
 
 def _profile(p):
@@ -490,9 +501,13 @@ def fleet_battle(our_fleet: list[dict] | str, enemy: str | list[dict], distances
     Per distance: each ship type's damage applied to each enemy type with the best tackle its fleet has in
     range; targets' EHP vs the incoming mix plus own tank plus enemy logi reps on whoever is primaried (a logi
     can't rep itself; jammed logi rep less); ECM jams assigned to the most valuable ships (EVE's jam formula
-    with range falloff). Each side focuses one target at a time and switches off targets it can't break.
+    with range falloff). Loaded command bursts boost their whole side (our_links/their_links override). Neuts
+    go on logi first; a ship Pyfa's cap sim says runs dry loses its cap-using modules (tank, reps, ECM).
+    Smartbombs pop missiles crossing their field and kill orbiting drones.
+    Each side focuses one target at a time and switches off targets it can't break.
     our_order: "compare" tries auto / logi_first / ewar_first / dps_first / squishiest_first and returns the
-    best. Returns winner, kill timeline, survivors, jams, tackle, target switches, the orders compared and
+    best. Returns winner, kill timeline, survivors, jams, tackle, target switches, capped_out,
+    missiles_reaching, command_bursts, the orders compared and
     insights (e.g. "kill the Falcon first", "can't break the Basilisks while 2 are alive")."""
     return fleet.battle(our_fleet, enemy, distances_km or [10], our_order, their_order, our_links, their_links)
 
@@ -766,8 +781,8 @@ def save_pilot(name: str, base_level: int = 4, skills: dict[str, int] | None = N
                replace: bool = False) -> dict:
     """Create/update a custom pilot: every skill at base_level, then `skills` overrides,
     e.g. {"Drones": 5, "Gallente Cruiser": 4}. Overrides merge into an existing pilot unless replace=true.
-    Fits using this pilot pick up the change on their next calculation."""
-    return pilots.save_custom(name, base_level, skills, replace)
+    Loaded fits using this pilot are recalculated straight away (refreshed_fits lists them)."""
+    return _refresh_pilot_fits(name, pilots.save_custom(name, base_level, skills, replace))
 
 
 @_tool
@@ -778,7 +793,7 @@ def set_pilot_skills(name: str, skills: dict | list, character_id: int | None = 
 
     skills accepts: {"Drones": 5, "3436": 5} (names or type IDs), the ESI /skills/ response or its "skills"
     list ([{"skill_id": .., "active_skill_level": ..}]), or [{"skill": name, "level": n}]."""
-    return pilots.save_imported(name, skills, character_id, source)
+    return _refresh_pilot_fits(name, pilots.save_imported(name, skills, character_id, source))
 
 
 @mcp.tool()
@@ -861,8 +876,8 @@ def esi_login_complete(code: str) -> dict:
 
 @_tool
 def esi_refresh_skills(pilot: str) -> dict:
-    """Re-import current skills for an ESI pilot/character."""
-    return esi.refresh_skills(pilot)
+    """Re-import current skills for an ESI pilot/character (loaded fits using it are recalculated)."""
+    return _refresh_pilot_fits(pilot, esi.refresh_skills(pilot))
 
 
 @_tool

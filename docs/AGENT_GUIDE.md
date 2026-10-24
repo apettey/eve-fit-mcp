@@ -17,7 +17,7 @@ Hurricane Fleet Issue killmail review): what they had to hand-write, and where t
 | How does my fit do against their whole comp? | `matchup_vs_doctrine` (range envelope vs each ship), `load_doctrine_ship` → `matchup_fits` / sweep goal |
 | What should we bring (how many of which fits)? | **`recommend_comp`** (pilots by count or name with skills, role minimums, budget; full fleet battles per comp; runners-up, swap values, reasoning) |
 | What fit of our hull best counters their comp? | **`counter_fit`** (searches racks pools scoring fleet battles vs the doctrine, with your support ships and pilot skills; before/after battles, changes, alternatives) |
-| Will our fleet beat their comp? Who do we kill first? | **`fleet_battle`** (logi reps on the primary, ECM jams, fleet tackle, focus fire; compares kill orders; per range) |
+| Will our fleet beat their comp? Who do we kill first? | **`fleet_battle`** (logi reps on the primary, ECM jams, fleet tackle, command bursts, neut cap-outs, smartbombs vs missiles/drones, focus fire; compares kill orders; per range) |
 | Will this beat their fit? | **`matchup_fits`** (both ways: applied DPS, EHP vs the other's damage mix, reps, time to kill, win ratio, N vs M) |
 | Small decision space (≤ ~20k combinations) | **`sweep_fit`**: exhaustive, returns the trade-off (Pareto) front |
 | Large decision space | `optimize_fit` (weighted greedy), then polish with `sweep_fit` |
@@ -69,6 +69,9 @@ Hurricane Fleet Issue killmail review): what they had to hand-write, and where t
 - **Fleet fights**: `fleet_battle(our_fleet, "<doctrine>", distances_km=[8, 20, 35])`. Read the insights:
   which kill order wins (killing a Falcon first can decide the fight), which targets can't be broken through
   their logi (then you need more DPS, alpha, neuts or a different target), and how much their ECM jams you.
+  Command bursts with charges loaded boost their whole side automatically (`command_bursts` in the result;
+  pass `our_links`/`their_links` to override). Neuts cap out logi first: `capped_out` lists ships that lost
+  their cap-using modules. `missiles_reaching` shows the share of missiles that get through smartbombs.
   Report the assumptions. It's a model, not a simulation of pilots.
 - **Counter fits**: `counter_fit(fit_id, "<doctrine>", count=…, support=[…your logi…], racks={…small pools…})`.
   Build the pools from `analyze_doctrine` (e.g. their reach and tackle suggest range or web modules; ECM
@@ -107,6 +110,13 @@ Hurricane Fleet Issue killmail review): what they had to hand-write, and where t
 - **Faction bling that adds nothing**: if a swap gains less than about 1% on every goal, keep the T2 module.
 - **Pyfa file import** mangles `.eft` files (it parses them as the old EFT-config format). Give users the
   `.xml` from `save_fit`, or the EFT text to paste via "Import from Clipboard".
+- **Smartbombs destroy missiles in flight** (and orbiting drones). Against a smartbomb fleet, missile and
+  drone doctrines lose damage, more so up close: check `missiles_reaching` in `fleet_battle` before
+  recommending HAMs or drones into a battleship brawl. Long range shrinks the share of the flight inside
+  the field but never removes it, since the missiles must reach the target.
+- **Bursts need charges**: a Command Burst without a charge does nothing in the fleet model or Pyfa.
+- **Cap warfare**: a fit that isn't cap stable alone is assumed kept stable by its fleet until neuts land;
+  only the neuts' drain decides the cap-out time.
 - **Units**: resists are fractions (0.6 = 60%). `weapon_tracking` is Pyfa's raw turret tracking attribute.
   See `list_metrics` and `docs/INTEGRATION.md`.
 

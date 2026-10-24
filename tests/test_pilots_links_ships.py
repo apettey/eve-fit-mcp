@@ -93,3 +93,16 @@ def test_ship_info():
     assert full["attributes"]["powerOutput"]["with_skills"] == full["attributes"]["powerOutput"]["base"]
     with pytest.raises(FitError, match="not a ship"):
         ships.ship_info("Gyrostabilizer II")
+
+
+def test_saving_a_pilot_recalculates_loaded_fits(rifter_eft, monkeypatch):
+    from eve_fit_mcp import server
+    monkeypatch.setattr(server, "_fits", {})
+    pilots.save_custom("Rookie", base_level=0)
+    h = FitHandle(rifter_eft, "Rookie")
+    server._fits[1] = h
+    server._fits[2] = FitHandle(rifter_eft, "All 5")
+    before = stats.compute(h)["cpu_total"]
+    r = server._refresh_pilot_fits("rookie", pilots.save_custom("Rookie", skills={"CPU Management": 5}))
+    assert r["refreshed_fits"] == [1]
+    assert stats.compute(h)["cpu_total"] > before  # no explicit recalc needed
