@@ -448,13 +448,22 @@ def _safe_name(name):
 
 @_tool
 def save_fit(fit_id: int, filename: str | None = None) -> dict:
-    """Write the fit as EFT into the fits/ library (default name: '<Ship> - <fit name>.eft')."""
+    """Write the fit into the fits/ library as both EFT (.eft) and EVE XML (.xml).
+
+    Use the .eft text with "Import from Clipboard" (EVE or Pyfa). Use the .xml for importing from a
+    file: Pyfa treats any file starting with "[" as the legacy EFT-config format and mangles it,
+    while XML imports intact (EVE's XML has no loaded-charge field, so ammo comes in as cargo)."""
+    from .pyfa_bridge import P
     h = _get(fit_id)
     os.makedirs(FITS_DIR, exist_ok=True)
     path = os.path.join(FITS_DIR, _safe_name(filename or "%s - %s" % (h.ship, h.name)))
     with open(path, "w", encoding="utf-8") as f:
         f.write(h.eft() + "\n")
-    return {"path": path}
+    xml_path = path[:-4] + ".xml"
+    with open(xml_path, "w", encoding="utf-8") as f:
+        f.write(P.Port.exportXml([h.fit]))
+    return {"eft_path": path, "xml_path": xml_path,
+            "note": "paste the .eft via Import from Clipboard; use the .xml for file import"}
 
 
 @_tool

@@ -84,3 +84,16 @@ def test_make_variant(hurricane):
     assert hurricane.slots_by_key()["med:1"]["item"] == "Warp Disruptor II"
     with pytest.raises(FitError):
         explore.make_variant(hurricane, [{"slot": "low:0", "item": "Stasis Webifier II"}])
+
+
+def test_save_fit_writes_importable_xml(tmp_path, monkeypatch):
+    from eve_fit_mcp import server
+    from eve_fit_mcp.pyfa_bridge import P
+    monkeypatch.setattr(server, "FITS_DIR", str(tmp_path))
+    h = server._register(FitHandle(HURRICANE))
+    out = server.save_fit(h.id, "Hurri test")
+    assert out["eft_path"].endswith(".eft") and out["xml_path"].endswith(".xml")
+    text = open(out["xml_path"], encoding="utf-8").read()
+    kind, _, data = P.Port.importAuto(text, out["xml_path"])  # Pyfa's file-import path
+    assert kind == "XML"
+    assert len([m for m in data[0].modules if not m.isEmpty]) == 19
