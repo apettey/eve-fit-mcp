@@ -44,6 +44,17 @@ claude mcp add --scope user eve-fit -- "<path to eve-fit-mcp>\.venv\Scripts\pyth
 (On macOS/Linux the interpreter is `.venv/bin/python`. Any MCP client works: the command is just
 `python -m eve_fit_mcp.server` over stdio.)
 
+## Skills for Claude Code
+
+Project skills in `.claude/skills/` keep future work true to how eve-fit was built:
+
+| Skill | Use it when |
+|---|---|
+| `eve-fit-design-fit` | designing, reviewing or optimising a fit (workflow, tool choice, gotchas, delivering `.eft`/`.xml`/EVEMon files) |
+| `eve-fit-add-tool` | adding or changing a tool. Founding principles: wrap Pyfa (never fork); Pyfa is the source of truth; one engine thread; additive contracts; evidence-driven; private user data |
+| `eve-fit-improve-from-agent-runs` | turning what fitting agents hand-wrote or got wrong into new tools |
+| `eve-fit-update-pyfa` | bumping the Pyfa submodule safely |
+
 ## Keeping up with upstream Pyfa
 
 ```powershell
