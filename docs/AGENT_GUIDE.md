@@ -15,6 +15,7 @@ Hurricane Fleet Issue killmail review): what they had to hand-write, and where t
 | Which ammo? | `compare_charges` (paper), **`recommend_ammo`** (applied, per enemy and range), `load_best_ammo` (loads it and records the intent in fit notes) |
 | What is their comp and how does it work? | **`save_doctrine`** (pasted EFTs, killmail fits merged per hull, or an eve-esi doctrine bundle), `analyze_doctrine` (roles, reps, reach, tackle, resist holes, observations) |
 | How does my fit do against their whole comp? | `matchup_vs_doctrine` (range envelope vs each ship), `load_doctrine_ship` → `matchup_fits` / sweep goal |
+| What should we bring (how many of which fits)? | **`recommend_comp`** (pilots by count or name with skills, role minimums, budget; full fleet battles per comp; runners-up, swap values, reasoning) |
 | What fit of our hull best counters their comp? | **`counter_fit`** (searches racks pools scoring fleet battles vs the doctrine, with your support ships and pilot skills; before/after battles, changes, alternatives) |
 | Will our fleet beat their comp? Who do we kill first? | **`fleet_battle`** (logi reps on the primary, ECM jams, fleet tackle, focus fire; compares kill orders; per range) |
 | Will this beat their fit? | **`matchup_fits`** (both ways: applied DPS, EHP vs the other's damage mix, reps, time to kill, win ratio, N vs M) |
@@ -74,6 +75,10 @@ Hurricane Fleet Issue killmail review): what they had to hand-write, and where t
   suggests sensor strength). Present its `changes`, `battle_before`/`battle_after` and `alternatives`, which
   show the trade-offs, e.g. "4th BCS wins twice as fast but loses 72% of your EHP". It keeps your fit if
   nothing beats it. The `fleet:<doctrine>@<km>x<count>` goal also works in `sweep_fit` and `optimize_fit`.
+- **Counter comps**: `recommend_comp(options=[your doctrine fits with costs], enemy="<doctrine>",
+  pilots=[names] or N, require={"logistics": 2}, budget_isk=…)`. Explain the pick with its battle
+  (kill order, timeline), the runners-up and `marginal_value` (e.g. "swapping a Nighthawk for a Malediction
+  turns the win into a stalemate"). If no comp is possible, `who_can_fly` shows why.
 - **Renamed items**: Pyfa maps removed items to their replacements (old ECCM modules → Sensor Booster) and
   stats note it. Mention it to the user.
 - Fit the counter, not just the fit: load the enemy doctrine as a fit, check `matchup_fits` at the expected

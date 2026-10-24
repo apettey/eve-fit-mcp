@@ -10,7 +10,7 @@ import sys
 
 from mcp.server.mcpserver import MCPServer
 
-from . import ammo, catalog, counter, doctrines, esi, evaluate, explore, fleet, items, matchup, optimizer, pilots, ships, skillplan, stats as stats_mod
+from . import ammo, catalog, comp, counter, doctrines, esi, evaluate, explore, fleet, items, matchup, optimizer, pilots, ships, skillplan, stats as stats_mod
 from .fitting import FitError, FitHandle
 from .pyfa_bridge import ROOT, boot, on_engine
 
@@ -41,7 +41,8 @@ EVE Online fitting engine (Pyfa). Typical loop:
    painters modelled); sweep goal "matchup:<enemy fit_id>@<km>". Enemy comps: save_doctrine (eve-esi doctrine
    bundles from zKill/battle reports pass straight in), analyze_doctrine, matchup_vs_doctrine, and
    fleet_battle (fleet vs comp: logi, ECM, tackle, focus fire, best kill order per range), and
-   counter_fit (search a hull's fit to beat a doctrine; before/after battles and trade-off alternatives).
+   counter_fit (search a hull's fit to beat a doctrine; before/after battles and trade-off alternatives),
+   recommend_comp (how many of which fits to bring, under pilot/skill, role and budget limits).
 6. save_fit writes .eft (clipboard import) + .xml (file import; Pyfa mangles .eft files) to fits/.
    skill_plan: minimum training plan for one or more fits (EVEMon .emp export).
 Rules of thumb: start from a valid fit; make must-haves constraints or locked slots, not weights;
@@ -518,6 +519,26 @@ def counter_fit(fit_id: int, doctrine: str, count: int = 1, distances_km: list[f
     _register(h)
     res["fit_id"] = h.id
     return res
+
+
+@_tool
+def recommend_comp(options: list[dict] | str, enemy: str, pilots: int | list[str] = 10,
+                   distances_km: list[float] | None = None, require: dict[str, int] | None = None,
+                   budget_isk: float | None = None, exact: bool = True, range_choice: str = "best",
+                   max_evals: int = 400, top: int = 5) -> dict:
+    """Recommend how many of each of our fits to bring against a saved enemy doctrine.
+
+    options: [{"fit_id": 3, "label": "Cerberus", "cost": 350e6, "min": 0, "max": 10, "role": "dps"},
+              {"eft": "...", "label": "Scimitar"}] or a saved (friendly) doctrine name.
+    pilots: a number, or pilot names (custom/ESI pilots) - then every ship needs a pilot with its skills.
+    require: role minimums, e.g. {"logistics": 2, "tackle": 1}. budget_isk needs a cost per option
+    (eve-esi can appraise fits). exact=true uses every pilot; false allows fewer ships.
+    Every comp is scored with full fleet battles (all kill orders compared) at distances_km; exhaustive when
+    the comp count fits max_evals, else local search. Returns the best comp with its battle (winner, kill
+    order, timeline), runners-up, the score change of swapping one ship type for another, plain-language
+    reasoning (reach, logi, ECM), and who can fly what."""
+    return comp.recommend(options, enemy, pilots, distances_km or [10], require, budget_isk, exact,
+                          range_choice, max_evals=max_evals, top=top)
 
 
 @_tool
