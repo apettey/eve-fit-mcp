@@ -22,6 +22,25 @@ def get_item(name_or_id):
     return item
 
 
+def eft_module_counts(eft):
+    """Counter of fitted-module/subsystem names listed in an EFT (no drones, cargo, implants)."""
+    import re
+    from collections import Counter
+    out = Counter()
+    for line in eft.strip().splitlines()[1:]:
+        line = line.strip()
+        if not line or line.startswith("[") or re.search(r"\sx\d+\s*$", line):
+            continue
+        if re.match(r"^\s*\w[\w ]*:\s", line):  # mutation detail lines
+            continue
+        name = re.sub(r"\s*\[\d+\]\s*$", "", line)
+        name = re.sub(r"\s*/offline\s*$", "", name, flags=re.I).split(",")[0].strip()
+        item = P.market.getItem(name) if name else None
+        if item is not None and (item.isModule or item.isSubsystem):
+            out[item.typeName] += 1
+    return out
+
+
 def slot_name(fitting_slot):
     for name, enum_name in SLOT_NAMES.items():
         if fitting_slot == getattr(P.FittingSlot, enum_name):
@@ -68,6 +87,12 @@ class FitHandle:
             self.set_command_links(command_links, recalc=False)
             fit.fill()
             self._wire()
+            # Pyfa's EFT import silently skips modules that don't fit (too many for the slots/hardpoints).
+            # Remember them so stats can flag the fit instead of quietly under-arming it.
+            from collections import Counter
+            fitted = Counter((m.baseItem if m.isMutated else m.item).typeName
+                             for m in fit.modules if not m.isEmpty)
+            self.import_dropped = dict(eft_module_counts(eft) - fitted)
             self.recalc()
             if drones_active:
                 self.auto_drones = True

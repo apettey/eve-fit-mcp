@@ -10,7 +10,7 @@ import sys
 
 from mcp.server.mcpserver import MCPServer
 
-from . import ammo, catalog, esi, evaluate, explore, items, matchup, optimizer, pilots, ships, skillplan, stats as stats_mod
+from . import ammo, catalog, doctrines, esi, evaluate, explore, items, matchup, optimizer, pilots, ships, skillplan, stats as stats_mod
 from .fitting import FitError, FitHandle
 from .pyfa_bridge import ROOT, boot, on_engine
 
@@ -37,7 +37,9 @@ EVE Online fitting engine (Pyfa). Typical loop:
    the result is loaded as a new fit_id - inspect it, tweak, re-optimise with different pools.
 5. applied_dps (vs structure/cruiser_mwd/frigate... at distances) to check application, not just paper DPS.
    Ammo follows the enemy: recommend_ammo / load_best_ammo per target (max paper DPS only for big/slow targets;
-   state the loaded ammo + intent). matchup_fits vs enemy fits; sweep goal "matchup:<enemy fit_id>@<km>".
+   state the loaded ammo + intent). matchup_fits / matchup_envelope vs enemy fits (both sides' scram/webs/
+   painters modelled); sweep goal "matchup:<enemy fit_id>@<km>". Enemy comps: save_doctrine (eve-esi doctrine
+   bundles from zKill/battle reports pass straight in), analyze_doctrine, matchup_vs_doctrine.
 6. save_fit writes .eft (clipboard import) + .xml (file import; Pyfa mangles .eft files) to fits/.
    skill_plan: minimum training plan for one or more fits (EVEMon .emp export).
 Rules of thumb: start from a valid fit; make must-haves constraints or locked slots, not weights;
@@ -398,6 +400,79 @@ def matchup_envelope(fit_id: int, enemy: int | str | dict, distances_km: list[fl
     return matchup.envelope(_get(fit_id), _enemy_spec(enemy),
                             distances_km or list(matchup.DEFAULT_ENVELOPE_KM), our_count, their_count,
                             our_prop, their_prop)
+
+
+@_tool
+def save_doctrine(name: str, ships: list[dict], description: str = "", source: dict | None = None,
+                  pilot: str = "All 5", replace: bool = True) -> dict:
+    """Save a named comp (usually an enemy doctrine) and return its analysis.
+
+    ships: [{"eft": "...", "count": 8, "label": "Nighthawk"},              # a known fit
+            {"efts": ["...", "...", "..."], "count": 3, "label": "Basi"},   # several killmail fits -> consensus
+            {"ship": "Sabre", "count": 1}]                                   # hull seen, fit unknown (bare hull)
+    Optional per ship: "pilot" (skills assumed; default `pilot`, All 5), "role" (override auto role).
+    replace=false adds/updates ships in an existing doctrine. source: e.g. {"type": "zkillboard", "url": ...}.
+    Stored privately in data/doctrines (gitignored)."""
+    return doctrines.save(name, ships, description, source, pilot, replace)
+
+
+@_tool
+def list_doctrines() -> dict:
+    """Saved doctrines with their comps."""
+    return {"doctrines": doctrines.list_all()}
+
+
+@_tool
+def analyze_doctrine(name: str) -> dict:
+    """A doctrine's read-out: per ship role (logistics/ewar/tackle/command/dps), DPS, remote reps, EHP and
+    weakest damage type, weapon reach, tackle ranges, speed and sig (MWD on and off), lock range; comp totals
+    (paper DPS, volley, total remote reps, fleet weakest/strongest damage type, reach, tackle range) and
+    plain-language observations to plan a counter from."""
+    return doctrines.analyze(name)
+
+
+@_tool
+def delete_doctrine(name: str) -> dict:
+    """Delete a saved doctrine."""
+    doctrines.delete(name)
+    return {"deleted": name}
+
+
+@_tool
+def merge_fits(efts: list[str], pilot: str = "All 5") -> dict:
+    """Consensus fit from several fits of one hull (e.g. zKillboard losses): most common modules per rack, most
+    common charge per module, with a confidence per module and the merged fit's validity."""
+    return doctrines.merge_fits(efts, pilot)
+
+
+@_tool
+def load_doctrine_ship(name: str, label: str) -> dict:
+    """Load one ship of a doctrine as a fit (fit_id), e.g. to use as a matchup enemy or sweep goal
+    ("matchup:<fit_id>@10"). Unknown fits load as the bare hull (flagged)."""
+    h, e = doctrines.ship_handle(name, label)
+    _register(h)
+    return {"fit_id": h.id, "label": e["label"], "count": e["count"], "fit_known": e["fit_known"],
+            "stats": _summary(h)}
+
+
+@_tool
+def matchup_vs_doctrine(fit_id: int, doctrine: str, distances_km: list[float] | None = None) -> dict:
+    """Run this fit's 1v1 range envelope against every ship type in a doctrine: where it wins/loses against
+    each, and who tackles whom. A first read on whether a fit counters a comp (fleet-level modelling with
+    logi, ECM and focus fire across the whole comp comes separately)."""
+    d = doctrines.load(doctrine)
+    out = []
+    for e in d["ships"]:
+        h, _ = doctrines.ship_handle(doctrine, e["label"])
+        try:
+            env = matchup.envelope(_get(fit_id), {"eft": h.eft(), "pilot": h.pilot, "name": e["label"]},
+                                   distances_km or list(matchup.DEFAULT_ENVELOPE_KM))
+        finally:
+            h.close()
+        out.append({"label": e["label"], "count": e["count"], "fit_known": e["fit_known"],
+                    "we_win_at_km": env["we_win_at_km"], "they_win_at_km": env["they_win_at_km"],
+                    "advice": env["advice"], "by_distance": env["by_distance"]})
+    return {"doctrine": d["name"], "vs": out, "assumptions": matchup.ASSUMPTIONS}
 
 
 @_tool

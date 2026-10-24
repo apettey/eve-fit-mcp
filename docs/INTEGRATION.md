@@ -92,3 +92,31 @@ For optimisation and exploration, the model can call eve-fit directly using EFT 
 `load_fit` → `try_candidates` / `optimize_fit` → `get_fit` (EFT back) → eve-esi `fitting_save`.
 For a named pilot built from eve-esi's skills, use `set_pilot_skills(name, skills)` once, then
 `pilot=name` everywhere.
+
+## Doctrine bundle (enemy comps from killmails and battle reports)
+
+Agreed with eve-esi-mcp. Its `doctrine_from_killmails` and `doctrine_from_battle_report` tools emit this
+shape, and the model passes it **unchanged** to eve-fit `save_doctrine(**bundle)` (a battle report returns
+`{"sides": [bundle_A, bundle_B]}`). The shape is additive-only on both sides; message the other server's
+session before adding fields.
+
+```jsonc
+{
+  "name": "Enemy HAM brawl",
+  "description": "...",
+  "source": {"type": "zkillboard" | "battle_report", "url": "...", "kill_ids": [...], "fetched_at": "..."},
+  "ships": [
+    {"ship": "Nighthawk", "label": "Nighthawk", "count": 8,               // unique pilots seen in that hull
+     "efts": ["[Nighthawk, km 123]\n...", "..."],                        // losses' fitted modules + loaded charges
+     "weapons_seen": ["Heavy Assault Missile Launcher II"], "pilots_seen": 8},
+    {"ship": "Sabre", "label": "Sabre", "count": 1, "efts": []}           // hull seen, no loss: fit unknown
+  ]
+}
+```
+
+- Several `efts` for one hull are merged into a consensus fit (`merge_fits`: most common modules per rack,
+  most common charge per module, confidence per module).
+- An empty `efts` keeps the hull as a flagged bare-hull placeholder.
+- `weapons_seen` and `pilots_seen` are stored as notes.
+- eve-fit also accepts `{"eft": "..."}` for a single known fit, plus optional `pilot` and `role` per ship.
+- Fits whose modules don't fit the hull are rejected rather than silently trimmed.

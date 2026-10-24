@@ -194,6 +194,8 @@ def compute(handle, skills_check=False, noprop=False):
                 issues.append("%s cannot load %s" % (mod.item.typeName, mod.charge.typeName))
             if mod.state == P.FittingModuleState.OFFLINE:
                 issues.append("%s is offline" % mod.item.typeName)
+        for name, n in sorted(getattr(handle, "import_dropped", {}).items()):
+            issues.append("%d x %s in the EFT could not be fitted (no free slot/hardpoint) and was dropped" % (n, name))
         s["issues"] = issues
         s["valid"] = not any(not i.endswith("is offline") for i in issues)
         if skills_check:

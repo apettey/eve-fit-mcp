@@ -13,6 +13,8 @@ Hurricane Fleet Issue killmail review): what they had to hand-write, and where t
 | Exact stats of a fit | `load_fit` → `get_stats`, or stateless `evaluate_fit` |
 | Damage against real targets | `applied_dps` (structure, cruiser_mwd, frigate…, at distances) |
 | Which ammo? | `compare_charges` (paper), **`recommend_ammo`** (applied, per enemy and range), `load_best_ammo` (loads it and records the intent in fit notes) |
+| What is their comp and how does it work? | **`save_doctrine`** (pasted EFTs, killmail fits merged per hull, or an eve-esi doctrine bundle), `analyze_doctrine` (roles, reps, reach, tackle, resist holes, observations) |
+| How does my fit do against their whole comp? | `matchup_vs_doctrine` (range envelope vs each ship), `load_doctrine_ship` → `matchup_fits` / sweep goal |
 | Will this beat their fit? | **`matchup_fits`** (both ways: applied DPS, EHP vs the other's damage mix, reps, time to kill, win ratio, N vs M) |
 | Small decision space (≤ ~20k combinations) | **`sweep_fit`**: exhaustive, returns the trade-off (Pareto) front |
 | Large decision space | `optimize_fit` (weighted greedy), then polish with `sweep_fit` |
@@ -54,6 +56,13 @@ Hurricane Fleet Issue killmail review): what they had to hand-write, and where t
   specific enemy. Always state the loaded ammo and its intent. It's written to the fit notes, which become
   the EVE fitting description in the `.xml`.
 - Carry the alternatives in cargo and say when to swap ("Rage vs Nighthawks; Caldari Navy vs Basilisks and Tengus").
+- **Tackle is modelled**: each side's own scram (switches off MWD/MJD), webs (stacked) and painters land
+  within their real ranges. Check `matchup_envelope` for where you win: a kiter can win at 20–60 km and
+  lose everything inside 12 km.
+- **Enemy comps**: build a doctrine (`save_doctrine`; from eve-esi `doctrine_from_killmails` /
+  `doctrine_from_battle_report` bundles, or pasted EFTs), read `analyze_doctrine` (logi rep totals, ewar,
+  reach, tackle range, weakest damage type), then test candidates with `matchup_vs_doctrine`. Unknown
+  fits are bare-hull placeholders; say so when they drive a conclusion.
 - Fit the counter, not just the fit: load the enemy doctrine as a fit, check `matchup_fits` at the expected
   range and numbers, then `sweep_fit` with goal `"matchup:<enemy fit_id>@10": "max"`. Ship-name targets use
   the bare hull (no hardeners). Use real enemy EFTs for decisions.
