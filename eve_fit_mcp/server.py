@@ -10,7 +10,7 @@ import sys
 
 from mcp.server.mcpserver import MCPServer
 
-from . import catalog, esi, evaluate, items, optimizer, pilots, ships, stats as stats_mod
+from . import catalog, esi, evaluate, explore, items, optimizer, pilots, ships, stats as stats_mod
 from .fitting import FitError, FitHandle
 from .pyfa_bridge import ROOT, boot, on_engine
 
@@ -31,7 +31,9 @@ EVE Online fitting engine (Pyfa). Typical loop:
    find_items (filters: slot, size, meta, tags, fits_ship, attributes, sort) and get_item_info
    to discover modules/ammo; tags hint at roles (list_item_tags).
 3. set_module / set_charge / set_drones for manual edits; clone_fit to branch ideas.
-4. optimize_fit with an objective (metric weights) and constraints for automated search;
+4. sweep_fit (exhaustive over small pools -> trade-off front), compare_charges (ammo side by side),
+   make_variant (batch changes -> new fit, e.g. refit modes), or optimize_fit (weighted greedy search)
+   with an objective (metric weights) and constraints for larger searches;
    the result is loaded as a new fit_id - inspect it, tweak, re-optimise with different pools.
 5. save_fit writes EFT into the fits/ library (paste straight into EVE).
 Slots are addressed as 'high:0', 'med:1', 'low:2', 'rig:0'. Metrics: see list_metrics.
@@ -389,6 +391,50 @@ def optimize_fit(fit_id: int, objective: dict[str, float], constraints: dict | N
     new = _register(h.derive(res["eft"]))
     res["fit_id"] = new.id
     return res
+
+
+@_tool
+def sweep_fit(fit_id: int, racks: dict[str, list[str | None]], goals: dict[str, str] | None = None,
+              constraints: dict | None = None, report: list[str] | None = None, locked: list[str] | None = None,
+              max_evals: int = 20000, include_eft: int = 5) -> dict:
+    """Exhaustive search: try every combination of the given pools and return the trade-off (Pareto) front.
+
+    racks: {"low": ["Gyrostabilizer II", "Nanofiber Internal Structure II", ...], "rig": [...], "med:3": [...]}.
+      A rack name fills all its unlocked slots (order-insensitive); a slot key fills just that slot.
+      null in a pool = leave empty. Rig combos over calibration are skipped automatically.
+    goals: e.g. {"dps_total": "max", "max_speed": "max", "align_time": "min"} (default dps_total max).
+    constraints: {"weapon_reach": {"min": 40000}, "cap_lasts_s": {"min": 180}} - must hold.
+    Returns the non-dominated fits (module counts per rack + stats; EFT for the first include_eft), and
+    which index is best on each goal. ~100-150 combos/s; errors if combinations > max_evals.
+    Prefer this over optimize_fit when pools are small: no weights to tune, and you see the trade-offs."""
+    return explore.sweep(_get(fit_id), racks, goals, constraints, report, locked or (), max_evals, include_eft)
+
+
+@_tool
+def compare_charges(fit_id: int, slot: str, charges: list[str] | None = None,
+                    metrics: list[str] | None = None, exclude_meta: list[str] | None = None) -> dict:
+    """Side-by-side stats for every ammo/script the weapon in `slot` can load (applied to all identical
+    weapons): DPS, volley, optimal/falloff (missile range), tracking, damage split. Flags charges with the
+    same total damage (they differ only in damage type). The fit is not changed."""
+    return explore.compare_charges(_get(fit_id), slot, charges,
+                                   catalog.DEFAULT_EXCLUDE_META if exclude_meta is None else tuple(exclude_meta),
+                                   metrics)
+
+
+@_tool
+def make_variant(fit_id: int, changes: list[dict], name: str | None = None) -> dict:
+    """Copy a fit and apply several slot changes at once (variants, refits, cloaky vs fight modes).
+
+    changes: [{"slot": "med:2", "item": "Covert Ops Cloaking Device II"},
+              {"slot": "high:0", "charge": "Scourge Rage Heavy Assault Missile"},
+              {"slot": "low:1", "item": null}, {"slot": "med:0", "state": "online"}]
+    Returns the new fit_id, its stats, the deltas vs the original, and warnings. The original is unchanged."""
+    base = _get(fit_id)
+    new, warnings = explore.make_variant(base, changes, name)
+    _register(new)
+    before, after = stats_mod.compute(base), stats_mod.compute(new, skills_check=True)
+    return {"fit_id": new.id, "warnings": warnings, "delta": _delta(before, after, DELTA_KEYS),
+            "stats": stats_mod.summarize(after)}
 
 
 # ---- library ------------------------------------------------------------------------------------
