@@ -89,6 +89,8 @@ class P:
         from eos.saveddata.damagePattern import DamagePattern
         from eos.saveddata.module import Module
         from eos.saveddata.drone import Drone
+        from eos.saveddata.implant import Implant
+        from eos.saveddata.booster import Booster
         from eos.gamedata import Item
         from service.port import Port
         from service.const import PortEftOptions
@@ -105,6 +107,8 @@ class P:
         cls.DamagePattern = DamagePattern
         cls.Module = Module
         cls.Drone = Drone
+        cls.Implant = Implant
+        cls.Booster = Booster
         cls.Item = Item
         cls.Port = Port
         cls.PortEftOptions = PortEftOptions

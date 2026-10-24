@@ -61,7 +61,8 @@ commit command. If the tests fail after an update, the fix almost always goes in
 - **Item database:** `find_items` (filter by name, category, group, slot, size, hardpoint, meta, market path, role tags, `fits_ship`, `charge_for`, attribute ranges; sort by any attribute), `get_item_info` (all attributes, variations, charges, skills; or a fitted module's modified values), `list_item_tags`, `list_item_groups`
 - **Pilots:** `list_pilots`, `get_pilot`, `save_pilot` (base level + per-skill overrides), `delete_pilot`
 - **Boosts:** `list_command_links`; apply with `command_links` on `load_fit` / `set_fit_options`
-- **ESI:** `esi_app_info`, `esi_login`, `esi_login_status`, `esi_login_complete`, `esi_refresh_skills`, `esi_list_fittings`, `esi_import_fitting`, `esi_logout`
+- **Integration:** `evaluate_fit` (stateless, versioned contract), `set_pilot_skills` (named pilot from another tool's skill list)
+- **ESI (standalone fallback):** `esi_app_info`, `esi_login`, `esi_login_status`, `esi_login_complete`, `esi_refresh_skills`, `esi_list_fittings`, `esi_import_fitting`, `esi_logout`
 - **Optimisation:** `optimize_fit`, `list_metrics`
 - **Library:** `save_fit`, `list_saved_fits`, `load_saved_fit`
 
@@ -111,6 +112,12 @@ So "low-slot speed modules a Hurricane can fit" is
 `find_items(slot="low", tags=["speed"], fits_ship="Hurricane")`, and "720mm ammo by range" is
 `find_items(charge_for="720mm Howitzer Artillery II", sort_by="weaponRangeMultiplier")`.
 Tags are heuristics. Confirm with `get_item_info` or `try_candidates`.
+
+## Integration
+
+Other servers call eve-fit over stdio. [eve-esi-mcp](https://github.com/apettey/eve-esi-mcp) uses the stateless
+`evaluate_fit` tool (contract `eve-fit/evaluate_fit@1`: EFT plus inline skills, implants and boosters in; raw
+stats, units and missing skills out). It owns the EVE login. See [docs/INTEGRATION.md](docs/INTEGRATION.md).
 
 ## Pilots, skills and boosts
 

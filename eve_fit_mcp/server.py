@@ -10,7 +10,7 @@ import sys
 
 from mcp.server.mcpserver import MCPServer
 
-from . import catalog, esi, items, optimizer, pilots, ships, stats as stats_mod
+from . import catalog, esi, evaluate, items, optimizer, pilots, ships, stats as stats_mod
 from .fitting import FitError, FitHandle
 from .pyfa_bridge import ROOT, boot, on_engine
 
@@ -451,6 +451,37 @@ def save_pilot(name: str, base_level: int = 4, skills: dict[str, int] | None = N
     e.g. {"Drones": 5, "Gallente Cruiser": 4}. Overrides merge into an existing pilot unless replace=true.
     Fits using this pilot pick up the change on their next calculation."""
     return pilots.save_custom(name, base_level, skills, replace)
+
+
+@_tool
+def set_pilot_skills(name: str, skills: dict | list, character_id: int | None = None,
+                     source: str | None = None) -> dict:
+    """Create/replace a pilot from a full skill list supplied by another tool (e.g. eve-esi-mcp's
+    character_skills), so no separate eve-fit ESI login is needed. Unlisted skills count as untrained.
+
+    skills accepts: {"Drones": 5, "3436": 5} (names or type IDs), the ESI /skills/ response or its "skills"
+    list ([{"skill_id": .., "active_skill_level": ..}]), or [{"skill": name, "level": n}]."""
+    return pilots.save_imported(name, skills, character_id, source)
+
+
+@mcp.tool()
+def evaluate_fit(eft: str, skills: dict | list | None = None, pilot: str | None = None,
+                 implants: list[int] | None = None, boosters: list[int] | None = None,
+                 damage_profile: str | list[float] | None = None, command_links: list[dict] | None = None,
+                 metrics: list[str] | None = None, drones_active: bool = True) -> dict:
+    """Stateless exact stats for an EFT fit in one call: contract 'eve-fit/evaluate_fit@1' (docs/INTEGRATION.md).
+
+    skills: inline {type_id: level} (active levels; also accepts names or the ESI /skills/ response), or
+    pilot: a pilot name; neither = 'All 5'. implants / boosters: type IDs applied to the fit.
+    damage_profile: preset (omni/em/thermal/kinetic/explosive) or [em, th, kin, exp] for EHP.
+    command_links: generic boosts. metrics: limit stats to these keys.
+    Returns {contract, valid, issues, pilot_used, engine, stats (raw numbers; resists are fractions 0-1),
+    units, missing_skills: [{item, skill, required, have}], ship}. Never errors on bad fits: valid=false + issues."""
+    def call():
+        with contextlib.redirect_stdout(sys.stderr):
+            return evaluate.evaluate(eft, skills, pilot, implants, boosters, damage_profile, command_links,
+                                     metrics, drones_active)
+    return on_engine(call)
 
 
 @_tool

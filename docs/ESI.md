@@ -1,5 +1,7 @@
 # ESI setup: real character skills (and in-game fittings)
 
+> **Using eve-fit together with [eve-esi-mcp](https://github.com/apettey/eve-esi-mcp)?** Then eve-esi owns the EVE login and passes skills and implants to eve-fit (see [INTEGRATION.md](INTEGRATION.md)), so you don't need anything on this page. These `esi_*` tools are a **standalone fallback** for using eve-fit on its own. Don't log the same character into both with the same EVE app, because EVE rotates refresh tokens.
+
 eve-fit can log in to EVE Online through EVE's SSO, import a character's trained skills as a **pilot**,
 and read the fittings saved in-game. Fits calculated with that pilot use your real skills, and the
 optimiser only picks modules and ammo the character can use.

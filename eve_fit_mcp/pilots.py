@@ -21,6 +21,7 @@ DEFAULT_PILOT = "All 5"
 _BUILTIN = re.compile(r"^\s*all\s*([0-5])\s*$|^\s*([0-5])\s*$", re.I)
 
 _cache = {}  # canonical name -> eos Character
+_inline = {}  # in-memory pilots from evaluate_fit(skills=...), keyed by content hash
 
 
 def _builtin_level(name):
@@ -38,6 +39,8 @@ def _path(name):
 
 
 def _load_record(name):
+    if str(name) in _inline:
+        return _inline[str(name)]
     p = _path(name)
     if not os.path.isfile(p):
         return None
@@ -103,7 +106,7 @@ def character(name=None):
                     item = ids.get(int(type_id))
                     if item is not None:
                         char.getSkill(item).setLevel(int(lvl), ignoreRestrict=True)
-            else:  # esi snapshot: untrained skills stay at 0
+            else:  # esi / imported snapshot: untrained skills stay at 0
                 char = P.Character(cname, None, initSkills=False)
                 char.apiUpdateCharSheet(
                     [{"typeID": int(t), "level": int(l)} for t, l in rec["skills"].items()],
@@ -159,6 +162,73 @@ def save_esi(name, character_id, skills, total_sp=None, security_status=0.0):
            "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")}
     _save_record(rec)
     return rec
+
+
+def normalize_skills(skills):
+    """Accept skills in the shapes other tools produce and return {type_id: level}.
+
+    - {"Drones": 5, "3436": 4, 3300: 3}          names or type IDs
+    - [{"skill_id": 3436, "active_skill_level": 5}, ...]   ESI /characters/{id}/skills/ entries
+    - {"skills": [...], "total_sp": ...}           the whole ESI response
+    - [{"skill": "Drones", "level": 5}, ...] / [{"type_id": .., "level": ..}]
+    ESI entries use active_skill_level (alpha clone limits apply), falling back to trained_skill_level.
+    """
+    P.load()
+    if isinstance(skills, dict) and isinstance(skills.get("skills"), list):
+        skills = skills["skills"]
+    pairs = []
+    if isinstance(skills, dict):
+        pairs = list(skills.items())
+    elif isinstance(skills, list):
+        for row in skills:
+            if not isinstance(row, dict):
+                raise FitError("skill list entries must be objects, got %r" % (row,))
+            key = row.get("skill_id", row.get("type_id", row.get("typeID", row.get("skill", row.get("name")))))
+            lvl = row.get("active_skill_level", row.get("level", row.get("trained_skill_level")))
+            pairs.append((key, lvl))
+    else:
+        raise FitError("skills must be an object or a list")
+    ids = P.Character.getSkillIDMap()
+    items = None
+    out = {}
+    for key, lvl in pairs:
+        if key is None or lvl is None:
+            raise FitError("skill entry missing id/name or level: %r" % ((key, lvl),))
+        lvl = int(lvl)
+        if not 0 <= lvl <= 5:
+            raise FitError("skill level must be 0-5 (got %s for %s)" % (lvl, key))
+        if isinstance(key, int) or str(key).isdigit():
+            if int(key) not in ids:
+                continue  # unpublished/removed skill: ignore rather than fail the whole import
+            out[int(key)] = lvl
+        else:
+            items = items or _skill_items()
+            out[resolve_skill(str(key), items).ID] = lvl
+    return out
+
+
+def save_imported(name, skills, character_id=None, source=None):
+    """Store a full skill snapshot supplied by another tool (e.g. eve-esi-mcp's character_skills).
+    Skills not listed count as untrained."""
+    if _builtin_level(name) is not None:
+        raise FitError("%r is a built-in pilot name" % name)
+    levels = normalize_skills(skills)
+    rec = {"name": name, "kind": "imported", "source": source, "character_id": character_id,
+           "skills": {str(k): v for k, v in levels.items()},
+           "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")}
+    _save_record(rec)
+    return describe(name)
+
+
+def inline(skills):
+    """Anonymous, in-memory pilot for one-off evaluation; returns its name."""
+    import hashlib
+    levels = normalize_skills(skills)
+    blob = json.dumps(sorted(levels.items())).encode()
+    name = "_inline:" + hashlib.sha1(blob).hexdigest()[:12]
+    if name not in _inline:
+        _inline[name] = {"name": name, "kind": "imported", "skills": {str(k): v for k, v in levels.items()}}
+    return name
 
 
 def delete(name):
