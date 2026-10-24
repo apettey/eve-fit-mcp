@@ -30,13 +30,40 @@ Medium Core Defense Field Extender II
 """
 
 
+KITER = """[Hurricane, kiter]
+Gyrostabilizer II
+Gyrostabilizer II
+Gyrostabilizer II
+Gyrostabilizer II
+Nanofiber Internal Structure II
+Overdrive Injector System II
+
+50MN Microwarpdrive II
+Warp Disruptor II
+Tracking Computer II, Optimal Range Script
+Tracking Computer II, Optimal Range Script
+
+720mm Howitzer Artillery II, Republic Fleet Phased Plasma M
+720mm Howitzer Artillery II, Republic Fleet Phased Plasma M
+720mm Howitzer Artillery II, Republic Fleet Phased Plasma M
+720mm Howitzer Artillery II, Republic Fleet Phased Plasma M
+720mm Howitzer Artillery II, Republic Fleet Phased Plasma M
+720mm Howitzer Artillery II, Republic Fleet Phased Plasma M
+
+Medium Polycarbon Engine Housing II
+Medium Polycarbon Engine Housing II
+Medium Ancillary Current Router I
+"""
+
+
 @pytest.fixture(scope="module")
 def nighthawk():
     return FitHandle(NIGHTHAWK)
 
 
 def test_rage_is_max_paper_but_wrong_vs_small_fast_targets(nighthawk):
-    r = ammo.recommend(nighthawk, [NIGHTHAWK, {"ship": "Basilisk", "prop": "mwd"}, "battleship"], [10])
+    # 15 km: outside the Nighthawk's own scram/web range, so the Basilisk keeps its MWD speed
+    r = ammo.recommend(nighthawk, [NIGHTHAWK, {"ship": "Basilisk", "prop": "mwd"}, "battleship"], [15])
     assert r["max_paper_ammo"] == "Scourge Rage Heavy Assault Missile"
     by = {t["target"].split(" ")[0]: t for t in r["targets"]}
     assert by["Nighthawk"]["best"] == "Scourge Rage Heavy Assault Missile"          # big, slow-ish: Rage
@@ -47,6 +74,31 @@ def test_rage_is_max_paper_but_wrong_vs_small_fast_targets(nighthawk):
     assert any("bare hull" in n for n in basi["target_notes"])
     with pytest.raises(FitError):
         ammo.recommend(nighthawk, ["moon"], [10])
+
+
+def test_own_tackle_changes_application(nighthawk):
+    basi = {"ship": "Basilisk", "prop": "mwd"}
+    from eve_fit_mcp import application
+    near = application.applied_dps(nighthawk, [basi], [5])["results"][0]
+    assert near["tackle"]["scrammed"] and near["tackle"]["webs"] >= 1
+    assert near["tackle"]["sig"] < 100            # scram switched the MWD off: no sig bloom
+    far = application.applied_dps(nighthawk, [basi], [15])["results"][0]
+    assert not far["tackle"]["scrammed"]
+    assert near["applied_weapon_dps"] > far["applied_weapon_dps"] * 1.5
+    off = application.applied_dps(nighthawk, [basi], [5], tackle=False)["results"][0]
+    assert off["applied_weapon_dps"] == pytest.approx(far["applied_weapon_dps"], rel=0.01)
+    stopped = application.applied_dps(nighthawk, [{"ship": "Basilisk", "prop": "mwd", "prop_state": "off"}],
+                                      [15], tackle=False)["results"][0]
+    assert stopped["target_sig"] < far["target_sig"]
+
+
+def test_envelope_kiter_vs_brawler(nighthawk):
+    from eve_fit_mcp.fitting import FitHandle
+    kiter = FitHandle(KITER)
+    env = matchup.envelope(kiter, NIGHTHAWK, [5, 30])
+    assert 5 in env["they_win_at_km"] and 30 in env["we_win_at_km"]
+    near = env["by_distance"][0]
+    assert near["they_tackle_us"]["scrammed"]
 
 
 def test_load_best_records_intent_in_notes_and_xml(nighthawk):

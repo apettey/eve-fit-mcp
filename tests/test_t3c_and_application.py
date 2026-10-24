@@ -66,8 +66,9 @@ def test_drones_relaunch_with_bandwidth(loki):
 
 
 def test_applied_dps(loki):
+    # tackle off: this checks raw application (the Loki's own web would otherwise slow the cruiser)
     r = application.applied_dps(loki, ["structure", "cruiser_mwd", {"name": "far", "sig": 400, "speed": 0}],
-                                distances_km=[10, 60])
+                                distances_km=[10, 60], tackle=False)
     by = {(x["target"], x["distance_km"]): x for x in r["results"]}
     assert by[("structure", 10)]["applied_weapon_dps"] == pytest.approx(stats.compute(loki)["dps_weapon"], rel=0.01)
     assert by[("cruiser_mwd", 10)]["applied_weapon_dps"] < by[("structure", 10)]["applied_weapon_dps"] * 0.7

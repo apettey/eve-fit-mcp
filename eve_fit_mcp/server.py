@@ -366,18 +366,38 @@ def get_ship_info(ship: str, pilot: str = "All 5", all_attributes: bool = False,
     return ships.ship_info(ship, pilot, all_attributes, subsystems)
 
 
-@_tool
-def matchup_fits(fit_id: int, enemy: int | str | dict, distance_km: float = 10, our_count: int = 1,
-                 their_count: int = 1) -> dict:
-    """Fit vs fit: applied DPS both ways (real sig/speed/resists at this range), each side's EHP against the
-    other's actual damage mix, sustained reps, time-to-kill, and ratio = their TTK on us / our TTK on them
-    (> 1 = we win). enemy: a loaded fit_id, EFT text (e.g. from a killmail), {"eft": ..., "pilot": ...} or
-    {"ship": "Basilisk", "prop": "mwd"} (bare hull - weak). Counts model focus fire (e.g. 5 vs 8).
-    To optimise against it, load the enemy fit and use sweep_fit goals like "matchup:<enemy fit_id>@10": "max"."""
+def _enemy_spec(enemy):
     if isinstance(enemy, int):
         e = _get(enemy)
-        enemy = {"eft": e.eft(), "pilot": e.pilot, "name": "%s, %s" % (e.ship, e.name)}
-    return matchup.matchup(_get(fit_id), enemy, distance_km, our_count, their_count)
+        return {"eft": e.eft(), "pilot": e.pilot, "name": "%s, %s" % (e.ship, e.name)}
+    return enemy
+
+
+@_tool
+def matchup_fits(fit_id: int, enemy: int | str | dict, distance_km: float = 10, our_count: int = 1,
+                 their_count: int = 1, our_prop: str | None = None, their_prop: str | None = None,
+                 tackle: bool = True) -> dict:
+    """Fit vs fit at one range: applied DPS both ways after each side's own tackle lands (scram switches off
+    MWD/MJD, webs slow with stacking, painters bloom sig - within real ranges), each side's EHP against the
+    other's actual damage mix, sustained reps, time-to-kill, and ratio = their TTK on us / our TTK on them
+    (> 1 = we win). enemy: a loaded fit_id, EFT text (e.g. from a killmail), {"eft": ..., "pilot": ...} or
+    {"ship": "Basilisk", "prop": "mwd"} (bare hull - weak). our_prop/their_prop: "on"/"off" (default as
+    fitted). Counts model focus fire (e.g. 5 vs 8). See matchup_envelope for the verdict across ranges, and
+    use sweep_fit goals like "matchup:<enemy fit_id>@10": "max" to optimise against it."""
+    return matchup.matchup(_get(fit_id), _enemy_spec(enemy), distance_km, our_count, their_count,
+                           our_prop, their_prop, tackle)
+
+
+@_tool
+def matchup_envelope(fit_id: int, enemy: int | str | dict, distances_km: list[float] | None = None,
+                     our_count: int = 1, their_count: int = 1, our_prop: str | None = None,
+                     their_prop: str | None = None) -> dict:
+    """Fit vs fit across ranges (default 2-60 km): verdict, time-to-kill both ways and who tackles whom at each
+    distance, plus where we win/lose ("fight at 20-60 km, avoid 2-12 km"). A comp can win the kite and lose
+    the brawl - use this before committing to an engagement range. Same enemy forms as matchup_fits."""
+    return matchup.envelope(_get(fit_id), _enemy_spec(enemy),
+                            distances_km or list(matchup.DEFAULT_ENVELOPE_KM), our_count, their_count,
+                            our_prop, their_prop)
 
 
 @_tool
@@ -413,16 +433,18 @@ def list_subsystem_layouts(ship: str, pilot: str = "All 5", require: dict | None
 
 @_tool
 def applied_dps(fit_id: int, targets: list | None = None, distances_km: list[float] | None = None,
-                target_angle: float = 90.0) -> dict:
+                target_angle: float = 90.0, tackle: bool = True) -> dict:
     """Applied DPS vs moving targets (Pyfa's damage-graph maths): missile explosion radius/velocity, turret
     tracking and optimal/falloff, drones and lock range, against target signature, speed and resists.
 
     targets: preset names (structure, battleship, battlecruiser, cruiser, cruiser_mwd, cruiser_webbed,
       destroyer, frigate, frigate_mwd) or {"name", "sig", "speed", "resists": [em, th, kin, exp]} or
-      {"preset": "cruiser_mwd", "speed": 1200}. distances_km: default [10]. Attacker stationary."""
+      {"preset": "cruiser_mwd", "speed": 1200}; also real ships {"ship": "Basilisk", "prop": "mwd"} or enemy
+      EFT fits ("prop_state": "off" for a ship not burning). distances_km: default [10]. Attacker stationary.
+    tackle=true applies this fit's own scram (MWD off), webs and painters to the target when in range."""
     from . import application
     return application.applied_dps(_get(fit_id), targets or list(application.TARGET_PRESETS),
-                                   distances_km or [10], target_angle)
+                                   distances_km or [10], target_angle, tackle)
 
 
 @_tool

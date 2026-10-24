@@ -40,7 +40,7 @@ def _load(handle, keys, item, charge, state):
 
 
 def recommend(handle, targets, distances_km=(10,), slot=None, charges=None,
-              exclude_meta=catalog.DEFAULT_EXCLUDE_META, top=5, usable_only=True):
+              exclude_meta=catalog.DEFAULT_EXCLUDE_META, top=5, usable_only=True, tackle=True):
     P.load()
     with lock():
         work = handle.clone()
@@ -68,7 +68,8 @@ def recommend(handle, targets, distances_km=(10,), slot=None, charges=None,
                 applied = {}
                 for t in resolved:
                     for d in distances_km:
-                        applied[(t["name"], d)] = application.applied(work.fit, dmg, t, d, only=group)
+                        applied[(t["name"], d)] = application.applied(work.fit, dmg, t, d, only=group,
+                                                                      tackle=tackle)
                 per_charge[name] = {"paper": paper, "range": rng, "falloff": fo, "applied": applied}
             if not per_charge:
                 raise FitError("none of the charges could be loaded")
@@ -76,6 +77,7 @@ def recommend(handle, targets, distances_km=(10,), slot=None, charges=None,
             out_targets = []
             for t in resolved:
                 for d in distances_km:
+                    tk = application.tackle_effect(work.fit, t, d) if tackle else None
                     ranked = sorted(per_charge, key=lambda n: -per_charge[n]["applied"][(t["name"], d)])
                     best = ranked[0]
                     best_val = per_charge[best]["applied"][(t["name"], d)]
@@ -83,6 +85,8 @@ def recommend(handle, targets, distances_km=(10,), slot=None, charges=None,
                     out_targets.append({
                         "target": t["name"], "distance_km": d,
                         "target_sig": round(t["sig"], 1), "target_speed": round(t["speed"], 1),
+                        **({"tackled": {"speed": round(tk["speed"], 1), "sig": round(tk["sig"], 1),
+                                        "scrammed": tk["scrammed"], "webs": tk["webs_in_range"]}} if tk else {}),
                         "best": best, "best_applied_dps": round(best_val, 1),
                         "max_paper_ammo": max_paper, "max_paper_ammo_applied_dps": round(mp_val, 1),
                         "loss_if_max_paper_ammo_pct": round(100 * (1 - mp_val / best_val), 1) if best_val else 0.0,
@@ -110,7 +114,7 @@ def _set_ammo_note(handle, item, text):
 
 
 def load_best(handle, target=None, distance_km=10, slot=None, charges=None,
-              exclude_meta=catalog.DEFAULT_EXCLUDE_META, usable_only=True):
+              exclude_meta=catalog.DEFAULT_EXCLUDE_META, usable_only=True, tackle=True):
     """Load the best charge into the weapon group and record why in the fit notes.
 
     target None = maximum paper DPS (e.g. structures, battleships); otherwise best applied vs that target."""
@@ -120,11 +124,16 @@ def load_best(handle, target=None, distance_km=10, slot=None, charges=None,
             choice = r["max_paper_ammo"]
             reason = "maximum paper DPS (%s DPS) - best vs large/slow targets" % r["max_paper_dps"]
         else:
-            r = recommend(handle, [target], [distance_km], slot, charges, exclude_meta, usable_only=usable_only)
+            r = recommend(handle, [target], [distance_km], slot, charges, exclude_meta, usable_only=usable_only,
+                          tackle=tackle)
             t = r["targets"][0]
             choice = t["best"]
-            reason = "best applied vs %s at %g km (%s DPS; max-paper %s would apply %s)" % (
-                t["target"], distance_km, t["best_applied_dps"], t["max_paper_ammo"], t["max_paper_ammo_applied_dps"])
+            tk = t.get("tackled")
+            state = "" if not tk else (" scrammed+%d webs" % tk["webs"] if tk["scrammed"] else
+                                       " %d webs" % tk["webs"] if tk["webs"] else " untackled")
+            reason = "best applied vs %s at %g km%s (%s DPS; max-paper %s would apply %s)" % (
+                t["target"], distance_km, state, t["best_applied_dps"], t["max_paper_ammo"],
+                t["max_paper_ammo_applied_dps"])
         item, keys = weapon_group(handle, slot)
         state = handle.slots_by_key()[keys[0]]["state"]
         _load(handle, keys, item, choice, state)
