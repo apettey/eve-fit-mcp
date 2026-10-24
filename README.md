@@ -17,6 +17,9 @@ that one file.
 | `eve_fit_mcp/fitting.py` | `FitHandle`: load EFT, swap modules/charges/drones using Pyfa's own slot and state rules |
 | `eve_fit_mcp/stats.py` | Flattens a fit into numeric metrics (DPS, EHP, tank, cap, speed, resources, ...) |
 | `eve_fit_mcp/catalog.py` | Item search and candidate generation (meta variants, group, market group, pools) |
+| `eve_fit_mcp/pilots.py` | Skill sets: built-in All 0-5, custom levels, ESI snapshots |
+| `eve_fit_mcp/esi.py` | EVE SSO login, skill and in-game fitting import ([docs/ESI.md](docs/ESI.md)) |
+| `eve_fit_mcp/ships.py` | Hull reference data (slots, attributes, bonuses) |
 | `eve_fit_mcp/optimizer.py` | Weighted objective, hard constraints, greedy or exhaustive search |
 | `eve_fit_mcp/server.py` | MCP tools |
 | `fits/` | Your EFT library (`save_fit` / `load_saved_fit`) |
@@ -51,9 +54,12 @@ commit command. If the tests fail after an update, the fix almost always goes in
 
 ## Tools
 
-- **Fits:** `load_fit`, `get_fit`, `get_stats`, `list_fits`, `clone_fit`, `close_fit`, `compare_fits`, `set_fit_options` (skill level, damage profile)
+- **Fits:** `load_fit`, `get_fit`, `get_stats`, `list_fits`, `clone_fit`, `close_fit`, `compare_fits`, `set_fit_options` (pilot, damage profile, command links)
 - **Editing:** `set_module`, `set_charge`, `set_drones`. Each returns the stat changes.
-- **Items:** `search_items`, `list_candidates`, `try_candidates` (what-if for every candidate in a slot, without changing the fit)
+- **Items:** `search_items`, `list_candidates`, `try_candidates` (what-if for every candidate in a slot, without changing the fit), `get_ship_info` (slots, hardpoints, attributes, bonuses; base and with skills)
+- **Pilots:** `list_pilots`, `get_pilot`, `save_pilot` (base level + per-skill overrides), `delete_pilot`
+- **Boosts:** `list_command_links`; apply with `command_links` on `load_fit` / `set_fit_options`
+- **ESI:** `esi_app_info`, `esi_login`, `esi_login_status`, `esi_login_complete`, `esi_refresh_skills`, `esi_list_fittings`, `esi_import_fitting`, `esi_logout`
 - **Optimisation:** `optimize_fit`, `list_metrics`
 - **Library:** `save_fit`, `list_saved_fits`, `load_saved_fit`
 
@@ -81,9 +87,26 @@ commit command. If the tests fail after an update, the fix almost always goes in
 - The original fit is never modified. The result is loaded as a new `fit_id` you can inspect, tweak and
   re-optimise.
 
+## Pilots, skills and boosts
+
+Every fit is calculated for a **pilot**:
+
+- `All 5` (default) to `All 0`: every skill at that level.
+- Custom: `save_pilot("Alt", base_level=4, skills={"Drones": 5, "Gallente Cruiser": 3})`.
+- Real characters: log in with EVE SSO and the trained skills are imported. See **[docs/ESI.md](docs/ESI.md)**
+  to register your own EVE application (Client ID, secret, callback `http://localhost:8765/callback`).
+
+With a pilot below All 5, stats report `missing_skills`, and the optimiser only considers modules and ammo the
+pilot can use (`usable_only`, on by default).
+
+**Command boosts** use Pyfa's generic links: `command_links=[{"type": "armor_all", "strength": 5, "mindlink": true}]`.
+Strength is the booster ship's bonus in %/level (0 to 5), and max skills with T2 bursts are assumed.
+`list_command_links` lists the types. Boosts, pilot and damage profile stay with a fit through clones and
+optimisation.
+
 ## Assumptions and limits
 
-- Skills: every skill at one level (`skill_level`, default 5). Real characters aren't loaded yet.
 - EHP uses the fit's damage profile (default omni). DPS is raw, not applied against a target.
-- Implants, boosters and fleet boosts in the EFT are respected but not optimised.
+- Implants and drugs (boosters) in the EFT are respected but not optimised. ESI imports skills, not implants.
+- Command boosts are the generic-link model, not a specific booster ship's fit.
 - Each evaluation takes about 10 ms, so greedy runs over a few hundred variants finish in seconds.

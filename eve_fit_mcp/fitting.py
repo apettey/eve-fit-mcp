@@ -1,6 +1,8 @@
 """A loaded, mutable fit backed by Pyfa's eos engine."""
 import itertools
 
+from . import pilots
+from .errors import FitError
 from .pyfa_bridge import P, lock
 
 SLOT_NAMES = {"low": "LOW", "med": "MED", "high": "HIGH", "rig": "RIG", "subsystem": "SUBSYSTEM", "service": "SERVICE"}
@@ -9,12 +11,7 @@ SLOT_ORDER = ("high", "med", "low", "rig", "subsystem", "service")
 # Uniform omni profile; callers can pass any [em, thermal, kinetic, explosive] weights
 DEFAULT_DAMAGE_PROFILE = (25, 25, 25, 25)
 
-_characters = {}
 _fit_ids = itertools.count(1)
-
-
-class FitError(ValueError):
-    pass
 
 
 def get_item(name_or_id):
@@ -25,23 +22,6 @@ def get_item(name_or_id):
     return item
 
 
-def character(skill_level=5):
-    """Pyfa character with every skill at `skill_level` (0-5)."""
-    P.load()
-    skill_level = int(skill_level)
-    if not 0 <= skill_level <= 5:
-        raise FitError("skill_level must be 0-5")
-    if skill_level == 5:
-        return P.Character.getAll5()
-    if skill_level == 0:
-        return P.Character.getAll0()
-    if skill_level not in _characters:
-        char = P.Character("All %d" % skill_level, skill_level)
-        P.db.save(char)
-        _characters[skill_level] = char
-    return _characters[skill_level]
-
-
 def slot_name(fitting_slot):
     for name, enum_name in SLOT_NAMES.items():
         if fitting_slot == getattr(P.FittingSlot, enum_name):
@@ -49,23 +29,41 @@ def slot_name(fitting_slot):
     return None
 
 
+def normalize_links(links):
+    """Validate generic command links: [{"type": "armor_all", "strength": 5, "mindlink": true}, ...]."""
+    P.load()
+    out = []
+    for link in links or ():
+        if isinstance(link, str):
+            link = {"type": link}
+        t = link.get("type")
+        if t not in P.COMMAND_LINK_DEFS:
+            raise FitError("Unknown command link %r; see list_command_links" % t)
+        strength = int(link.get("strength", max(P.LINK_STRENGTHS)))
+        if strength not in P.LINK_STRENGTHS:
+            raise FitError("strength must be one of %s (booster ship bonus %%/level)" % list(P.LINK_STRENGTHS))
+        out.append({"type": t, "strength": strength, "mindlink": bool(link.get("mindlink", False))})
+    return out
+
+
 class FitHandle:
     """Wraps an eos Fit. All mutation goes through Pyfa's own module/state rules."""
 
-    def __init__(self, eft, skill_level=5, damage_profile=DEFAULT_DAMAGE_PROFILE, drones_active=True):
+    def __init__(self, eft, pilot=None, damage_profile=DEFAULT_DAMAGE_PROFILE, drones_active=True,
+                 command_links=None):
         P.load()
         with lock():
             fit = P.Port.importEft(eft.strip().splitlines())
             if fit is None:
                 raise FitError("Could not parse EFT text (first line must look like [Ship, Name])")
             fit.implantLocation = P.ImplantLocation.FIT
-            fit.character = character(skill_level)
             # Working fits never enter Pyfa's DB session: thousands of throwaway module swaps would
             # leave orphans for SQLAlchemy to flush. We wire the owner links SQLAlchemy would set.
             self.fit = fit
             self.id = next(_fit_ids)
-            self.skill_level = int(skill_level)
+            self.pilot = pilots.canonical(pilot)
             self.set_damage_profile(damage_profile, recalc=False)
+            self.set_command_links(command_links, recalc=False)
             fit.fill()
             self._wire()
             self.recalc()
@@ -81,22 +79,32 @@ class FitHandle:
         for thing in itertools.chain(self.fit.modules, self.fit.drones, self.fit.fighters):
             thing.owner = self.fit
 
+    def derive(self, eft, name=None):
+        """New handle from `eft` with this fit's pilot, damage profile and command links
+        (none of which EFT carries)."""
+        h = FitHandle(eft, self.pilot, self.damage_profile, drones_active=True, command_links=self.command_links)
+        if name:
+            h.fit.name = name
+        return h
+
     def clone(self, name=None):
         # EFT doesn't carry drone state, and export re-sorts the bay, so match stacks by item
         active = {}
         for d in self.fit.drones:
             active.setdefault(d.item.ID, []).append(d.amountActive)
-        h = FitHandle(self.eft(), self.skill_level, self.damage_profile, drones_active=False)
+        h = self.derive(self.eft(), name)
         for d in h.fit.drones:
             stack = active.get(d.item.ID)
             d.amountActive = stack.pop(0) if stack else 0
         h.recalc()
-        if name:
-            h.fit.name = name
         return h
 
     def recalc(self):
         with lock():
+            # pilots rebuilds a Character when its skills change; pick that up here
+            char = pilots.character(self.pilot)
+            if self.fit.character is not char:
+                self.fit.character = char
             self._wire()  # free()/replace() create modules with no owner
             self.fit.clear()
             self.fit.calculateModifiedAttributes()
@@ -121,11 +129,19 @@ class FitHandle:
             if recalc:
                 self.recalc()
 
-    def set_skill_level(self, level):
+    def set_pilot(self, pilot):
+        self.pilot = pilots.canonical(pilot)
+        self.recalc()
+
+    def set_command_links(self, links, recalc=True):
+        links = normalize_links(links)
         with lock():
-            self.fit.character = character(level)
-            self.skill_level = int(level)
-            self.recalc()
+            del self.fit.commandLinks[:]
+            for l in links:
+                self.fit.commandLinks.append(P.CommandLink(l["type"], l["strength"], l["mindlink"]))
+            self.command_links = links
+            if recalc:
+                self.recalc()
 
     # ---- slots -----------------------------------------------------------------------------
 

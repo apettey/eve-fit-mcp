@@ -150,7 +150,8 @@ def _pool_for(pools, key):
 def optimize(handle, objective, constraints=None, slots="all", mode="variants", pools=None,
              locked=None, allow_empty=False, optimize_charges=True, group_identical=True,
              strategy="greedy", max_passes=4, max_evals=5000, normalize=True,
-             exclude_meta=catalog.DEFAULT_EXCLUDE_META, max_meta_level=None, time_limit_s=120):
+             exclude_meta=catalog.DEFAULT_EXCLUDE_META, max_meta_level=None, time_limit_s=120,
+             usable_only=True):
     """Optimise a *clone* of `handle`; the original is untouched. Returns a result dict."""
     t0 = time.time()
     work = handle.clone(name=handle.name)
@@ -167,7 +168,8 @@ def optimize(handle, objective, constraints=None, slots="all", mode="variants", 
         def candidates(unit):
             k = unit[0]
             items = catalog.module_candidates(work, k, mode=mode, pool=_pool_for(pools, k),
-                                              exclude_meta=exclude_meta, max_meta_level=max_meta_level)
+                                              exclude_meta=exclude_meta, max_meta_level=max_meta_level,
+                                              usable_only=usable_only)
             names = [i.typeName for i in items]
             if allow_empty:
                 names.append(None)
@@ -203,7 +205,7 @@ def optimize(handle, objective, constraints=None, slots="all", mode="variants", 
                                 "score": list(best_score)})
                     improved = True
             if optimize_charges:
-                improved |= _charges(search, keys, exclude_meta, max_meta_level, log, p + 1)
+                improved |= _charges(search, keys, exclude_meta, max_meta_level, log, p + 1, usable_only)
             if not improved:
                 break
 
@@ -228,18 +230,18 @@ def optimize(handle, objective, constraints=None, slots="all", mode="variants", 
         work.close()
 
 
-def _charges(search, keys, exclude_meta, max_meta_level, log, p):
+def _charges(search, keys, exclude_meta, max_meta_level, log, p, usable_only=True):
     """Try every valid charge on each group of identical charge-using modules."""
     h = search.h
     slots = h.slots_by_key()
     groups = {}
     for k in keys:
         s = slots[k]
-        if s["item"] and catalog.charge_candidates(h, k, exclude_meta, max_meta_level):
+        if s["item"] and catalog.charge_candidates(h, k, exclude_meta, max_meta_level, usable_only):
             groups.setdefault(s["item"], []).append(k)
     improved = False
     for item, unit in groups.items():
-        cands = [c.typeName for c in catalog.charge_candidates(h, unit[0], exclude_meta, max_meta_level)]
+        cands = [c.typeName for c in catalog.charge_candidates(h, unit[0], exclude_meta, max_meta_level, usable_only)]
         if not cands:
             continue
         best_score, _ = search.evaluate()

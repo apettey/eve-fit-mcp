@@ -10,7 +10,7 @@ import sys
 
 from mcp.server.mcpserver import MCPServer
 
-from . import catalog, optimizer, stats as stats_mod
+from . import catalog, esi, optimizer, pilots, ships, stats as stats_mod
 from .fitting import FitError, FitHandle
 from .pyfa_bridge import ROOT, boot, on_engine
 
@@ -33,7 +33,10 @@ EVE Online fitting engine (Pyfa). Typical loop:
    the result is loaded as a new fit_id - inspect it, tweak, re-optimise with different pools.
 5. save_fit writes EFT into the fits/ library (paste straight into EVE).
 Slots are addressed as 'high:0', 'med:1', 'low:2', 'rig:0'. Metrics: see list_metrics.
-Stats assume all skills at skill_level (default 5) and the fit's damage profile for EHP."""
+Pilots: 'All 5' (default) .. 'All 0', custom skill sets (save_pilot) or real characters via
+esi_login. With a pilot below All 5 the optimiser only picks modules/ammo the pilot can use.
+Command boosts: generic links per fit (list_command_links, set_fit_options command_links).
+EHP uses the fit's damage profile."""
 
 mcp = MCPServer("eve-fit", instructions=INSTRUCTIONS)
 _fits = {}
@@ -82,7 +85,7 @@ def _register(h):
 
 
 def _summary(h, metrics=None):
-    return stats_mod.summarize(stats_mod.compute(h), metrics)
+    return stats_mod.summarize(stats_mod.compute(h, skills_check=True), metrics)
 
 
 def _delta(before, after, keys):
@@ -97,14 +100,17 @@ DELTA_KEYS = ["dps_total", "volley", "ehp_total", "tank_sustained", "cap_stable"
 # ---- fits ---------------------------------------------------------------------------------------
 
 @_tool
-def load_fit(eft: str, skill_level: int = 5, damage_profile: str | list[float] | None = None,
-             drones_active: bool = True) -> dict:
+def load_fit(eft: str, pilot: str = "All 5", damage_profile: str | list[float] | None = None,
+             command_links: list[dict] | None = None, drones_active: bool = True) -> dict:
     """Load a fit from EFT text (Pyfa/EVE clipboard format). Returns fit_id, slot layout and stats.
 
+    pilot: 'All 5'..'All 0', a custom pilot or an ESI character (list_pilots).
     damage_profile: incoming damage for EHP - preset (omni/em/thermal/kinetic/explosive) or [em, th, kin, exp].
-    drones_active: launch drones in bay order up to bandwidth / max active (EFT import leaves them docked).
+    command_links: generic boosts, e.g. [{"type": "armor_all", "strength": 5, "mindlink": true}].
+    drones_active: launch drones (heaviest first) within bandwidth (EFT import leaves them docked).
     """
-    h = _register(FitHandle(eft, skill_level, _profile(damage_profile) or DAMAGE_PRESETS["omni"], drones_active))
+    h = _register(FitHandle(eft, pilot, _profile(damage_profile) or DAMAGE_PRESETS["omni"], drones_active,
+                            command_links))
     return {"fit_id": h.id, "slots": h.slots(), "stats": _summary(h)}
 
 
@@ -123,15 +129,16 @@ def list_fits() -> dict:
 def get_fit(fit_id: int) -> dict:
     """EFT text and slot layout of a loaded fit."""
     h = _get(fit_id)
-    return {"fit_id": h.id, "ship": h.ship, "name": h.name, "skill_level": h.skill_level,
-            "damage_profile": list(h.damage_profile), "eft": h.eft(), "slots": h.slots()}
+    return {"fit_id": h.id, "ship": h.ship, "name": h.name, "pilot": h.pilot,
+            "damage_profile": list(h.damage_profile), "command_links": h.command_links,
+            "eft": h.eft(), "slots": h.slots()}
 
 
 @_tool
 def get_stats(fit_id: int, metrics: list[str] | None = None, full: bool = False) -> dict:
     """Stats for a fit. full=True returns every metric (resists per type, resources, etc.)."""
     h = _get(fit_id)
-    s = stats_mod.compute(h)
+    s = stats_mod.compute(h, skills_check=True)
     return s if full else stats_mod.summarize(s, metrics)
 
 
@@ -151,15 +158,23 @@ def close_fit(fit_id: int) -> dict:
 
 
 @_tool
-def set_fit_options(fit_id: int, skill_level: int | None = None,
-                    damage_profile: str | list[float] | None = None) -> dict:
-    """Change all-skills level (0-5) and/or the incoming damage profile used for EHP."""
+def set_fit_options(fit_id: int, pilot: str | None = None, damage_profile: str | list[float] | None = None,
+                    command_links: list[dict] | None = None) -> dict:
+    """Change a fit's pilot, incoming damage profile and/or generic command links.
+
+    command_links replaces the current set; pass [] to remove all boosts.
+    Returns stats plus the deltas caused by the change."""
     h = _get(fit_id)
-    if skill_level is not None:
-        h.set_skill_level(skill_level)
+    before = stats_mod.compute(h)
+    if pilot is not None:
+        h.set_pilot(pilot)
     if damage_profile is not None:
         h.set_damage_profile(_profile(damage_profile))
-    return _summary(h)
+    if command_links is not None:
+        h.set_command_links(command_links)
+    out = _summary(h)
+    out["delta"] = _delta(before, stats_mod.compute(h), DELTA_KEYS)
+    return out
 
 
 @_tool
@@ -268,6 +283,14 @@ def try_candidates(fit_id: int, slot: str, items: list[str] | None = None, mode:
 
 
 @_tool
+def get_ship_info(ship: str, pilot: str = "All 5", all_attributes: bool = False) -> dict:
+    """Hull reference: slots, hardpoints, fitting resources, HP/resists, cap, navigation, targeting,
+    drone/cargo capacity, bonuses text and required skills. Values show base and with the pilot's skills.
+    all_attributes=true adds every dogma attribute (display name, unit, base, with_skills)."""
+    return ships.ship_info(ship, pilot, all_attributes)
+
+
+@_tool
 def list_metrics() -> dict:
     """Metric names usable in objectives/constraints, plus damage profile presets."""
     return {"metrics": stats_mod.METRICS, "damage_presets": DAMAGE_PRESETS}
@@ -282,7 +305,7 @@ def optimize_fit(fit_id: int, objective: dict[str, float], constraints: dict | N
                  allow_empty: bool = False, optimize_charges: bool = True, group_identical: bool = True,
                  strategy: str = "greedy", max_evals: int = 5000, normalize: bool = True,
                  exclude_meta: list[str] | None = None, max_meta_level: int | None = None,
-                 time_limit_s: float = 120) -> dict:
+                 time_limit_s: float = 120, usable_only: bool = True) -> dict:
     """Search module/charge choices to maximise `objective` subject to `constraints`.
 
     objective: metric weights, e.g. {"dps_total": 1, "ehp_total": 0.5, "align_time": -0.3}.
@@ -294,6 +317,8 @@ def optimize_fit(fit_id: int, objective: dict[str, float], constraints: dict | N
     pools: extra candidates per rack or key, e.g. {"low": ["Damage Control II", "Gyrostabilizer II"]}.
         Pools are how empty slots get filled and how different module types are considered.
     strategy: greedy (coordinate descent) or exhaustive (all combos per rack, within max_evals).
+    usable_only: only consider modules/charges the fit's pilot has the skills for.
+    The fit's pilot, damage profile and command links apply throughout.
     The original fit is untouched; the optimised fit is loaded as a new fit_id.
     """
     h = _get(fit_id)
@@ -301,8 +326,8 @@ def optimize_fit(fit_id: int, objective: dict[str, float], constraints: dict | N
         h, objective, constraints, slots or "all", mode, pools, locked, allow_empty, optimize_charges,
         group_identical, strategy, max_evals=max_evals, normalize=normalize,
         exclude_meta=catalog.DEFAULT_EXCLUDE_META if exclude_meta is None else tuple(exclude_meta),
-        max_meta_level=max_meta_level, time_limit_s=time_limit_s)
-    new = _register(FitHandle(res["eft"], h.skill_level, h.damage_profile))
+        max_meta_level=max_meta_level, time_limit_s=time_limit_s, usable_only=usable_only)
+    new = _register(h.derive(res["eft"]))
     res["fit_id"] = new.id
     return res
 
@@ -336,13 +361,121 @@ def list_saved_fits() -> dict:
 
 
 @_tool
-def load_saved_fit(filename: str, skill_level: int = 5, damage_profile: str | list[float] | None = None) -> dict:
+def load_saved_fit(filename: str, pilot: str = "All 5", damage_profile: str | list[float] | None = None,
+                   command_links: list[dict] | None = None) -> dict:
     """Load an EFT file from the fits/ library."""
     path = os.path.join(FITS_DIR, _safe_name(filename))
     if not os.path.isfile(path):
         raise FitError("No saved fit %r" % filename)
     with open(path, encoding="utf-8") as f:
-        return load_fit(f.read(), skill_level, damage_profile)
+        return load_fit(f.read(), pilot, damage_profile, command_links)
+
+
+# ---- pilots & boosts -----------------------------------------------------------------------------
+
+@_tool
+def list_pilots() -> dict:
+    """Available pilots: built-in All 0-5, custom skill sets and ESI characters."""
+    return {"pilots": pilots.list_pilots(), "esi_logged_in": esi.characters()}
+
+
+@_tool
+def get_pilot(name: str, skills: list[str] | None = None) -> dict:
+    """Pilot details; `skills` = names or substrings (e.g. ["Drone", "Gallente Cruiser"]) to show levels."""
+    return pilots.describe(name, skills)
+
+
+@_tool
+def save_pilot(name: str, base_level: int = 4, skills: dict[str, int] | None = None,
+               replace: bool = False) -> dict:
+    """Create/update a custom pilot: every skill at base_level, then `skills` overrides,
+    e.g. {"Drones": 5, "Gallente Cruiser": 4}. Overrides merge into an existing pilot unless replace=true.
+    Fits using this pilot pick up the change on their next calculation."""
+    return pilots.save_custom(name, base_level, skills, replace)
+
+
+@_tool
+def delete_pilot(name: str) -> dict:
+    """Delete a custom or ESI pilot (ESI login tokens are kept; see esi_logout)."""
+    pilots.delete(name)
+    return {"deleted": name}
+
+
+@_tool
+def list_command_links() -> dict:
+    """Generic command link types usable in command_links.
+
+    strength = booster ship's command bonus %/level (0 = no ship bonus, 5 = max); mindlink adds +25%.
+    Max skills and T2 bursts are assumed (Pyfa's generic link model)."""
+    from .pyfa_bridge import P
+    P.load()
+    return {"links": {k: {"label": v[0], "category": v[1]} for k, v in P.COMMAND_LINK_DEFS.items()},
+            "strengths": list(P.LINK_STRENGTHS),
+            "example": [{"type": "armor_all", "strength": 5, "mindlink": True},
+                        {"type": "skirmish_all", "strength": 3}]}
+
+
+# ---- ESI ------------------------------------------------------------------------------------------
+
+@_tool
+def esi_login(pilot_name: str | None = None) -> dict:
+    """Start EVE SSO login. Give the returned URL to the user to open and log in; it redirects to a local
+    callback and the character's skills are imported as a pilot (named pilot_name or the character name).
+    Then poll esi_login_status. Uses your own EVE app if EVE_ESI_CLIENT_ID is set (docs/ESI.md), else
+    Pyfa's public app. Scopes: read skills, read fittings."""
+    uri = esi.login_start(pilot_name)
+    return {"login_url": uri,
+            "app": esi.app_info()["app"],
+            "next": "Open login_url, log in, pick the character. Then call esi_login_status. If the browser "
+                    "can't reach the local callback, pass the code it shows (or the full URL it ended on) "
+                    "to esi_login_complete."}
+
+
+@_tool
+def esi_app_info() -> dict:
+    """Which EVE application ESI logins use (own app from EVE_ESI_* env vars, or Pyfa's), callback URL
+    and scopes. Never reveals the secret."""
+    return esi.app_info()
+
+
+@_tool
+def esi_login_status() -> dict:
+    """State of the pending ESI login: waiting / done (with pilot) / error."""
+    st = esi.login_status()
+    st.pop("uri", None)
+    return st
+
+
+@_tool
+def esi_login_complete(code: str) -> dict:
+    """Manual fallback: the code from Pyfa's callback page, or the full redirect URL the browser ended on."""
+    return esi.login_complete(code)
+
+
+@_tool
+def esi_refresh_skills(pilot: str) -> dict:
+    """Re-import current skills for an ESI pilot/character."""
+    return esi.refresh_skills(pilot)
+
+
+@_tool
+def esi_list_fittings(pilot: str) -> dict:
+    """Fittings saved in-game for an ESI character."""
+    return {"fittings": esi.list_fittings(pilot)}
+
+
+@_tool
+def esi_import_fitting(pilot: str, fitting_id: int, use_pilot: bool = True,
+                       command_links: list[dict] | None = None) -> dict:
+    """Load an in-game fitting as a fit (calculated with that character's skills unless use_pilot=false)."""
+    eft = esi.fitting_eft(pilot, fitting_id)
+    return load_fit(eft, pilots.canonical(pilot) if use_pilot else "All 5", None, command_links)
+
+
+@_tool
+def esi_logout(pilot: str) -> dict:
+    """Forget the stored ESI token for a character (its pilot skill snapshot is kept)."""
+    return esi.logout(pilot)
 
 
 def main():

@@ -1,4 +1,5 @@
 """Item lookup and candidate generation, using Pyfa's market service for variations/publicity."""
+from . import pilots
 from .fitting import FitError, get_item, slot_name
 from .pyfa_bridge import P, lock
 
@@ -75,7 +76,7 @@ def _meta_ok(item, exclude_meta, max_meta_level):
 
 
 def module_candidates(handle, key, mode="variants", pool=None, exclude_meta=DEFAULT_EXCLUDE_META,
-                      max_meta_level=None):
+                      max_meta_level=None, usable_only=False):
     """Items that could replace whatever sits in `key`.
 
     mode: "variants"     - meta variants of the current module (T1/T2/faction/deadspace...)
@@ -83,6 +84,7 @@ def module_candidates(handle, key, mode="variants", pool=None, exclude_meta=DEFA
           "market_group" - siblings in the market tree (e.g. all 'Armor Hardeners')
           "pool"         - only names given in `pool`
     `pool` names are always added (and filtered to the right slot) in every mode.
+    usable_only: drop items the fit's pilot lacks the skills for.
     """
     P.load()
     with lock():
@@ -121,18 +123,21 @@ def module_candidates(handle, key, mode="variants", pool=None, exclude_meta=DEFA
                 continue
             if not fit.canFit(it):
                 continue
+            if usable_only and not pilots.can_use(fit.character, it):
+                continue
             out.append(it)
         out.sort(key=lambda i: i.typeName)
         return out
 
 
-def charge_candidates(handle, key, exclude_meta=DEFAULT_EXCLUDE_META, max_meta_level=None):
+def charge_candidates(handle, key, exclude_meta=DEFAULT_EXCLUDE_META, max_meta_level=None, usable_only=False):
     P.load()
     with lock():
         _, mod = handle._resolve(key)
         if mod.isEmpty:
             return []
         out = [c for c in mod.getValidCharges()
-               if P.market.getPublicityByItem(c) and _meta_ok(c, exclude_meta, max_meta_level)]
+               if P.market.getPublicityByItem(c) and _meta_ok(c, exclude_meta, max_meta_level)
+               and (not usable_only or pilots.can_use(mod.owner.character, c))]
         out.sort(key=lambda i: i.typeName)
         return out

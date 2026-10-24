@@ -2,6 +2,7 @@
 
 Every numeric key here is usable as an optimizer objective or constraint.
 """
+from . import pilots
 from .fitting import SLOT_NAMES
 from .pyfa_bridge import P, lock
 
@@ -48,13 +49,14 @@ def _a(fit, attr, default=0.0):
     return float(v) if v is not None else default
 
 
-def compute(handle):
+def compute(handle, skills_check=False):
     fit = handle.fit
     with lock():
         s = {}
         s["ship"] = handle.ship
         s["name"] = handle.name
-        s["skill_level"] = handle.skill_level
+        s["pilot"] = handle.pilot
+        s["command_links"] = list(handle.command_links)
         s["damage_profile"] = dict(zip(DMG, handle.damage_profile))
 
         # Offense
@@ -144,6 +146,8 @@ def compute(handle):
                 issues.append("%s is offline" % mod.item.typeName)
         s["issues"] = issues
         s["valid"] = not any(not i.endswith("is offline") for i in issues)
+        if skills_check:
+            s["missing_skills"] = pilots.missing_skills(fit)
         return s
 
 
@@ -155,7 +159,12 @@ def summarize(stats, keys=None):
     default = ["dps_total", "volley", "ehp_total", "tank_sustained", "cap_stable", "cap_stable_pct", "cap_lasts_s",
                "max_speed", "align_time", "signature", "lock_range", "scan_res",
                "cpu_used", "cpu_total", "pg_used", "pg_total", "calibration_used", "calibration_total"]
-    out = {"ship": stats["ship"], "name": stats["name"], "valid": stats["valid"], "issues": stats["issues"]}
+    out = {"ship": stats["ship"], "name": stats["name"], "pilot": stats["pilot"], "valid": stats["valid"],
+           "issues": stats["issues"]}
+    if stats.get("command_links"):
+        out["command_links"] = stats["command_links"]
+    if "missing_skills" in stats:
+        out["missing_skills"] = stats["missing_skills"]
     for k in keys or default:
         v = stats.get(k)
         if isinstance(v, float):

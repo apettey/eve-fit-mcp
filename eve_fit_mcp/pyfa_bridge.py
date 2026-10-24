@@ -94,6 +94,7 @@ class P:
         from service.const import PortEftOptions
         from service.market import Market
         from gui.fitCommands.helpers import activeStateLimit, ModuleInfo
+        from eos.saveddata.commandLink import CommandLink, COMMAND_LINK_DEFS, STRENGTHS
 
         cls.db = db
         cls.FittingModuleState = FittingModuleState
@@ -110,5 +111,8 @@ class P:
         cls.market = Market.getInstance()
         cls.activeStateLimit = activeStateLimit
         cls.ModuleInfo = ModuleInfo
+        cls.CommandLink = CommandLink
+        cls.COMMAND_LINK_DEFS = COMMAND_LINK_DEFS
+        cls.LINK_STRENGTHS = STRENGTHS
         cls._loaded = True
         return cls
