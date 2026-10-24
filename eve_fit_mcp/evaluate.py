@@ -45,6 +45,7 @@ UNITS = {
     "slots": "{rack: {used, total}} counts",
 }
 _NON_STATS = {"ship", "name", "pilot", "skill_level", "damage_profile", "command_links", "issues", "valid",
+              "weapon_groups",
               "missing_skills"}
 
 
@@ -145,6 +146,8 @@ def evaluate(eft, skills=None, pilot=None, implants=None, boosters=None, damage_
         out["issues"] = list(s["issues"]) + extra + ["unknown item %r (dropped from the fit)" % n for n in unknown]
         out["valid"] = bool(s["valid"]) and not unknown
         out["ship"] = s["ship"]
+        out["weapon_groups"] = [{k: (round(v, 3) if isinstance(v, float) else v) for k, v in g.items()}
+                                for g in s.get("weapon_groups", [])]
     except FitError as e:
         out["issues"].append(str(e))
     except Exception as e:  # contract: never throw at the caller

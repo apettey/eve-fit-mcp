@@ -20,10 +20,11 @@ METRICS = {
     "dps_weapon": "Weapon DPS",
     "dps_drone": "Drone DPS",
     "volley": "Alpha strike damage",
-    "weapon_optimal": "Optimal range m (turrets) / max range (missiles); shortest weapon",
-    "weapon_falloff": "Falloff m (turrets); shortest weapon",
+    "weapon_optimal": "Optimal range m (turrets) / max range (missiles) of the primary weapon group",
+    "weapon_falloff": "Falloff m (turrets) of the primary weapon group",
     "weapon_reach": "Optimal + falloff m - a good kiting-range proxy",
-    "weapon_tracking": "Turret tracking rad/s; lowest weapon",
+    "weapon_tracking": "Turret tracking (Pyfa trackingSpeed attribute) of the primary weapon group",
+    "applied:<target>@<km>": "sweep_fit only: applied DPS vs a target preset at a distance, e.g. applied:structure@60",
     "ehp_total": "Effective HP against the fit's damage profile",
     "ehp_shield": "Shield EHP", "ehp_armor": "Armor EHP", "ehp_hull": "Hull EHP",
     "hp_total": "Raw HP",
@@ -79,25 +80,37 @@ def compute(handle, skills_check=False, noprop=False):
         s["volley_drone"] = float(fit.getDroneVolley().total)
 
         # Weapon reach: worst (shortest) across fitted damage-dealing turrets/launchers
-        optimal, falloff, tracking, exp_radius, exp_velocity = [], [], [], [], []
+        # Weapon groups: identical weapon + charge. Range/tracking metrics describe the PRIMARY group
+        # (most DPS), so a couple of utility launchers don't mask the main guns' range.
+        groups = {}
         for mod in fit.modules:
             if mod.isEmpty or mod.hardpoint not in (P.FittingHardpoint.TURRET, P.FittingHardpoint.MISSILE):
                 continue
-            if mod.getDps().total <= 0:
+            dps = mod.getDps().total
+            if dps <= 0:
                 continue
-            optimal.append(float(mod.maxRange or 0))
-            falloff.append(float(mod.falloff or 0))
-            if mod.hardpoint == P.FittingHardpoint.TURRET:
-                tracking.append(float(mod.getModifiedItemAttr("trackingSpeed") or 0))
+            key = (mod.item.typeName, mod.charge.typeName if mod.charge is not None else None)
+            g = groups.setdefault(key, {"weapon": key[0], "charge": key[1], "count": 0, "dps": 0.0,
+                                        "hardpoint": "turret" if mod.hardpoint == P.FittingHardpoint.TURRET
+                                        else "launcher",
+                                        "optimal": float(mod.maxRange or 0), "falloff": float(mod.falloff or 0)})
+            g["count"] += 1
+            g["dps"] += float(dps)
+            if g["hardpoint"] == "turret":
+                g["tracking"] = float(mod.getModifiedItemAttr("trackingSpeed") or 0)
             elif mod.charge is not None:
-                exp_radius.append(float(mod.getModifiedChargeAttr("aoeCloudSize") or 0))
-                exp_velocity.append(float(mod.getModifiedChargeAttr("aoeVelocity") or 0))
-        s["weapon_optimal"] = min(optimal) if optimal else 0.0
-        s["weapon_falloff"] = min(falloff) if falloff else 0.0
+                g["explosion_radius"] = float(mod.getModifiedChargeAttr("aoeCloudSize") or 0)
+                g["explosion_velocity"] = float(mod.getModifiedChargeAttr("aoeVelocity") or 0)
+        ordered = sorted(groups.values(), key=lambda g: -g["dps"])
+        s["weapon_groups"] = ordered
+        main = ordered[0] if ordered else {}
+        s["weapon_optimal"] = main.get("optimal", 0.0)
+        s["weapon_falloff"] = main.get("falloff", 0.0)
         s["weapon_reach"] = s["weapon_optimal"] + s["weapon_falloff"]
-        s["weapon_tracking"] = min(tracking) if tracking else 0.0
-        s["missile_explosion_radius"] = max(exp_radius) if exp_radius else 0.0
-        s["missile_explosion_velocity"] = min(exp_velocity) if exp_velocity else 0.0
+        s["weapon_tracking"] = main.get("tracking", 0.0)
+        launchers = [g for g in ordered if g["hardpoint"] == "launcher" and "explosion_radius" in g]
+        s["missile_explosion_radius"] = launchers[0]["explosion_radius"] if launchers else 0.0
+        s["missile_explosion_velocity"] = launchers[0]["explosion_velocity"] if launchers else 0.0
 
         # Defense
         ehp = fit.ehp or {k: 0.0 for k in LAYERS}

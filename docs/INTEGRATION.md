@@ -55,7 +55,10 @@ is about 10–50 ms. Calls are serialised inside eve-fit, since Pyfa is single-t
   "ship": "Rifter",
   "stats": { "dps_total": 157.3, "max_speed": 3213.2, "resist_armor_em": 0.66, "slots": {"low": {"used": 4, "total": 4}}, ... },
   "units": { "dps_total": "HP/s", "max_speed": "m/s", "resist_<layer>_<type>": "fraction 0-1", ... },
-  "missing_skills": [{"item": "200mm AutoCannon II", "skill": "Small Projectile Turret", "required": 5, "have": 0}]
+  "missing_skills": [{"item": "200mm AutoCannon II", "skill": "Small Projectile Turret", "required": 5, "have": 0}],
+  "weapon_groups": [{"weapon": "720mm Howitzer Artillery II", "charge": "Republic Fleet Depleted Uranium M",
+                     "count": 6, "dps": 279.0, "hardpoint": "turret", "optimal": 41300, "falloff": 32800,
+                     "tracking": 8.4}]   // most DPS first; launchers carry explosion_radius / explosion_velocity
 }
 ```
 
@@ -63,6 +66,9 @@ is about 10–50 ms. Calls are serialised inside eve-fit, since Pyfa is single-t
 - **Never throws for bad fits.** Unparseable EFT, unknown items, unknown pilots and invalid params all come
   back as `valid: false` with `issues`. Unknown item names are reported, because Pyfa would otherwise drop
   them silently.
+- **Weapon range keys** (`weapon_optimal`, `weapon_falloff`, `weapon_reach`, `weapon_tracking`) describe the
+  **primary weapon group** (the one with the most DPS). `weapon_groups` (top level, added within `@1`) breaks
+  every group down.
 - **Stat keys** (all present unless `metrics` limits them):
   - Offence: `dps_total`, `dps_weapon`, `dps_drone`, `volley`, `weapon_optimal`, `weapon_falloff`, `weapon_reach`, `weapon_tracking`
   - Defence: `ehp_total`, `ehp_shield`, `ehp_armor`, `ehp_hull`, `hp_total`, `resist_<layer>_<em|thermal|kinetic|explosive>`, `resist_avg_<layer>`, `tank_sustained`, `tank_burst`, `shield_regen`, `remote_rep`

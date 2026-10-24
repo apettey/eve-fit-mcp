@@ -215,8 +215,10 @@ def build(efts, start_pilot=None, attributes=None, include_cargo=False, fitting_
                              "group": sk.group.name, "rank": rank(sk), "sp": sp, "minutes": round(mins, 1),
                              "time": _fmt_minutes(mins),
                              "for": sorted(why.get(sid, ()))[:4] if kind == "Planned" else []})
-            return {"entries": rows, "skills": {_skill(s).typeName: l for s, l in sorted(target.items(),
-                                                key=lambda kv: _skill(kv[0]).typeName)},
+            planned = {}
+            for e in rows:
+                planned[e["skill"]] = max(planned.get(e["skill"], 0), e["level"])
+            return {"entries": rows, "skills": dict(sorted(planned.items())),
                     "fitting_skills_added": {_skill(s).typeName: target.get(s, 0) for s in added if s in target},
                     "total_sp": total_sp, "total_time": _fmt_minutes(total_min),
                     "total_minutes": round(total_min), "attributes": attrs, "start_pilot": start_pilot,

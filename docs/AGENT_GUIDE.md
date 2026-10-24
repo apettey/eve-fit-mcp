@@ -33,7 +33,10 @@ Hurricane Fleet Issue killmail review): what they had to hand-write, and where t
 5. **Explore with `sweep_fit`** over small pools per rack (use `find_items` with `tags` to build them).
    Present the trade-off front ("+30 DPS costs 45 m/s") rather than one weighted answer.
 6. **Check application**: `applied_dps` against the targets you expect, and `compare_charges` across ranges.
-   Paper DPS alone is misleading (HAMs on an unwebbed MWD cruiser apply about 45%).
+   Paper DPS alone is misleading (HAMs on an unwebbed MWD cruiser apply about 45%). To make range or
+   application count in a search, use `sweep_fit` goals like `"applied:structure@60": "max"` or
+   `"applied:cruiser_mwd@20": "max"`. Without them, a Tracking Enhancer or range rig looks worthless.
+   Range metrics (`weapon_optimal` and friends) describe the main weapon group; `weapon_groups` lists them all.
 7. **Check the pilot**: `missing_skills`. With a real pilot, `optimize_fit` and `sweep_fit` only consider
    items the pilot can use (`usable_only`, on by default in `optimize_fit`). `skill_plan` gives the training.
 8. **Deliver**: `save_fit` (both formats) plus the numbers that matter and the trade-offs taken.

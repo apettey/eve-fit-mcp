@@ -121,3 +121,16 @@ def test_skill_plan_minimum_and_evemon(tmp_path):
         have[sid] = lvl
     with pytest.raises(FitError, match="Unknown item"):
         skillplan.build([HURRICANE.replace("Gyrostabilizer II", "Gyrostabilizer Ultra")])
+
+
+def test_sweep_applied_goal_and_quiet_variants(hurricane):
+    r = explore.sweep(hurricane, {"low:3": ["Gyrostabilizer II", "Tracking Enhancer II"]},
+                      goals={"applied:structure@70": "max"}, include_eft=0)
+    best = r["front"][0]
+    assert best["modules"]["low:3"] == {"Tracking Enhancer II": 1}  # range matters at 70 km
+    assert best["stats"]["applied:structure@70"] > 0
+    v, warnings = explore.make_variant(hurricane, [{"slot": "low:0", "item": "Damage Control II"},
+                                                   {"slot": "rig:0", "item": "Medium Core Defense Field Extender I"}])
+    assert warnings == []  # passive modules/rigs no longer warn about ACTIVE state
+    c = explore.compare_charges(hurricane, "high:0", metrics=["weapon_optimal"])
+    assert c["same_total_damage"] and "_dps" not in c["results"][0]

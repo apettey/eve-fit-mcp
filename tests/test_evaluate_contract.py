@@ -64,6 +64,28 @@ def test_implants_and_boosters_applied():
     assert any("123456789" in i for i in r["issues"])
 
 
+def test_mixed_weapons_range_is_primary_group():
+    mixed = """[Hurricane Fleet Issue, mixed]
+Gyrostabilizer II
+
+Large Shield Extender II
+
+Light Missile Launcher II, Caldari Navy Mjolnir Light Missile
+Light Missile Launcher II, Caldari Navy Mjolnir Light Missile
+720mm Howitzer Artillery II, Republic Fleet Depleted Uranium M
+720mm Howitzer Artillery II, Republic Fleet Depleted Uranium M
+720mm Howitzer Artillery II, Republic Fleet Depleted Uranium M
+720mm Howitzer Artillery II, Republic Fleet Depleted Uranium M
+"""
+    r = evaluate.evaluate(mixed)
+    groups = r["weapon_groups"]
+    assert groups[0]["weapon"] == "720mm Howitzer Artillery II" and groups[0]["count"] == 4
+    assert {g["weapon"] for g in groups} == {"720mm Howitzer Artillery II", "Light Missile Launcher II"}
+    assert r["stats"]["weapon_optimal"] == pytest.approx(groups[0]["optimal"])
+    assert r["stats"]["weapon_falloff"] > 10000  # artillery falloff, not the missiles' ~1 m
+    assert "weapon_groups" not in r["stats"]
+
+
 @pytest.mark.parametrize("eft, needle", [
     ("garbage", "header"),
     (RIFTER.replace("Gyrostabilizer II", "Gyrostabilizer Ultra"), "unknown item"),

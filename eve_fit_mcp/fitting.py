@@ -241,6 +241,8 @@ class FitHandle:
                 raise FitError("%s goes in a %s slot, not %s" % (it.typeName, slot_name(new.slot), key.split(":")[0]))
             if state is None:
                 new.state = P.activeStateLimit(it.ID)
+                if not new.isValidState(new.state):  # passive module / rig: online is its top state
+                    new.state = P.FittingModuleState.ONLINE
             else:
                 new.state = getattr(P.FittingModuleState, state.upper())
             if charge == "keep":

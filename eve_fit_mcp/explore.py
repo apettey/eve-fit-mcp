@@ -83,6 +83,14 @@ def sweep(handle, racks, goals=None, constraints=None, report=None, locked=(), m
             raise FitError("goal directions must be 'max' or 'min'")
     report = list(dict.fromkeys(list(goals) + list(constraints or {}) + list(report or DEFAULT_REPORT)))
     noprop = any(k.endswith("_noprop") for k in report)
+    applied_keys = [k for k in report if k.startswith("applied:")]
+    applied_specs = {}
+    for k in applied_keys:
+        try:
+            tgt, km = k[len("applied:"):].split("@")
+            applied_specs[k] = (tgt, float(km))
+        except ValueError:
+            raise FitError("applied metrics look like applied:<target preset>@<km>, e.g. applied:structure@60")
     t0 = time.time()
     with lock():
         work = handle.clone()
@@ -124,6 +132,10 @@ def sweep(handle, racks, goals=None, constraints=None, report=None, locked=(), m
                     failed += 1
                     continue
                 s = stats_mod.compute(work, noprop=noprop)
+                if applied_specs:
+                    from . import application
+                    for k, (tgt, km) in applied_specs.items():
+                        s[k] = application.applied_dps(work, [tgt], [km])["results"][0]["applied_dps"]
                 evaluated += 1
                 if not s["valid"]:
                     invalid += 1
@@ -202,14 +214,14 @@ def compare_charges(handle, slot, charges=None, exclude_meta=catalog.DEFAULT_EXC
                                                                       ("kineticDamage", "kinetic"),
                                                                       ("explosiveDamage", "explosive"))
                        if a in item.attributes and item.attributes[a].value}
-                rows.append({"charge": name, "damage_split": dmg,
+                rows.append({"charge": name, "damage_split": dmg, "_dps": s["dps_total"],
                              **{k: round(s[k], 3) if isinstance(s[k], float) else s[k] for k in metrics}})
-            rows.sort(key=lambda r: -(r.get("dps_total") or 0))
+            rows.sort(key=lambda r: -(r.get("_dps") or 0))
             # flag charges whose total damage equals another's (they differ only in damage type)
             by_dps = {}
             for r in rows:
-                if "dps_total" in r:
-                    by_dps.setdefault(round(r["dps_total"], 1), []).append(r["charge"])
+                if "_dps" in r:
+                    by_dps.setdefault(round(r.pop("_dps"), 1), []).append(r["charge"])
             same = [v for v in by_dps.values() if len(v) > 1]
             return {"weapon": cur["item"], "slots": group, "current": cur["charge"], "results": rows,
                     "same_total_damage": same,
