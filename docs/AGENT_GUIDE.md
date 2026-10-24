@@ -12,7 +12,8 @@ Hurricane Fleet Issue killmail review): what they had to hand-write, and where t
 | What modules or ammo could go here? | `find_items` (slot, size, meta, `tags`, `fits_ship` or `fits_fit`, `charge_for`, attribute filters, sort), `get_item_info` |
 | Exact stats of a fit | `load_fit` → `get_stats`, or stateless `evaluate_fit` |
 | Damage against real targets | `applied_dps` (structure, cruiser_mwd, frigate…, at distances) |
-| Which ammo? | `compare_charges` |
+| Which ammo? | `compare_charges` (paper), **`recommend_ammo`** (applied, per enemy and range), `load_best_ammo` (loads it and records the intent in fit notes) |
+| Will this beat their fit? | **`matchup_fits`** (both ways: applied DPS, EHP vs the other's damage mix, reps, time to kill, win ratio, N vs M) |
 | Small decision space (≤ ~20k combinations) | **`sweep_fit`**: exhaustive, returns the trade-off (Pareto) front |
 | Large decision space | `optimize_fit` (weighted greedy), then polish with `sweep_fit` |
 | One module or ammo swap | `try_candidates` (no change) or `set_module` (returns deltas) |
@@ -40,6 +41,22 @@ Hurricane Fleet Issue killmail review): what they had to hand-write, and where t
 7. **Check the pilot**: `missing_skills`. With a real pilot, `optimize_fit` and `sweep_fit` only consider
    items the pilot can use (`usable_only`, on by default in `optimize_fit`). `skill_plan` gives the training.
 8. **Deliver**: `save_fit` (both formats) plus the numbers that matter and the trade-offs taken.
+
+## Ammo and enemies
+
+- **Ammo follows the target, not the paper.** Max-damage ammo (Rage, Fury, Hail…) has a big explosion radius,
+  slow explosion velocity or short range. Example: a HAM Nighthawk on Scourge Rage applies about 89% to an
+  enemy Nighthawk, but loses 33–35% against a Basilisk (MWD or AB) compared with Dread Guristas or Caldari Navy
+  HAMs. Webbed, the gap shrinks to about 10%.
+- When the user names who they're fighting, run `recommend_ammo` against those ships (`{"ship": "Basilisk",
+  "prop": "mwd"}`, or better, their actual EFT, e.g. from killmails via eve-esi), and load per purpose:
+  `load_best_ammo(target=None)` for maximum DPS (structures, battleships), or `load_best_ammo(target=…)` for a
+  specific enemy. Always state the loaded ammo and its intent. It's written to the fit notes, which become
+  the EVE fitting description in the `.xml`.
+- Carry the alternatives in cargo and say when to swap ("Rage vs Nighthawks; Caldari Navy vs Basilisks and Tengus").
+- Fit the counter, not just the fit: load the enemy doctrine as a fit, check `matchup_fits` at the expected
+  range and numbers, then `sweep_fit` with goal `"matchup:<enemy fit_id>@10": "max"`. Ship-name targets use
+  the bare hull (no hardeners). Use real enemy EFTs for decisions.
 
 ## Gotchas
 

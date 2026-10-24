@@ -21,6 +21,8 @@ numbers, clear trade-offs and files they can import. Never guess numbers. Measur
 | Candidates | `find_items` with `tags` (e.g. `speed`, `turret-damage`, `tank:shield-buffer`, `tackle`, `ammo:long-range`), `fits_ship` / `fits_fit`, `meta_groups`, attribute filters, `sort_by`; `get_item_info` |
 | Stats | `load_fit` → `get_stats` (full stats incl. `*_noprop`, `ehp_vs_*`, `weapon_groups`), or `evaluate_fit` |
 | Application | `applied_dps` (structure / cruiser_mwd / frigate… at distances); `compare_charges` for ammo |
+| Ammo per enemy | `recommend_ammo` (best applied per target and range), `load_best_ammo` (loads it and writes the intent to the fit notes) |
+| Beat a doctrine | `matchup_fits` (TTK both ways, win ratio, N vs M); `sweep_fit` goal `"matchup:<enemy fit_id>@<km>": "max"` |
 | Small search | `sweep_fit` (exhaustive → Pareto front; goals can be `applied:structure@60`, `*_noprop`) |
 | Big search | `optimize_fit` (weighted greedy), then polish with `sweep_fit` |
 | What-if | `try_candidates`, `set_module` (deltas), `make_variant` (batch → new fit, e.g. refit modes) |
@@ -39,10 +41,15 @@ numbers, clear trade-offs and files they can import. Never guess numbers. Measur
 5. **Check application and range**: paper DPS lies. HAMs on an unwebbed MWD cruiser apply about 45%;
    arty against a structure is all about falloff (Tremor flat to about 75 km on a Hurricane Fleet Issue).
 6. **Decide utility slots yourself** (cloak, probes, nos/neut, point) and lock them. Optimisers can't value them.
-7. **Refit modes** (cloaky vs fight, structure vs defenders): build each mode with `make_variant`. Carry the
+7. **Ammo and enemies**: if the user names an enemy or role, run `recommend_ammo` against those ships (real
+   enemy EFTs beat bare-hull `{"ship": …}` targets) and `load_best_ammo` per purpose. Maximum paper DPS
+   (`target=null`) only suits structures and battleships. Rage HAMs lose about a third vs Basilisks. State the
+   loaded ammo and why, and carry the alternatives. For doctrine fights, load the enemy fit and check
+   `matchup_fits`, then sweep with a `matchup:` goal.
+8. **Refit modes** (cloaky vs fight, structure vs defenders): build each mode with `make_variant`. Carry the
    swap modules in cargo, list exact refit steps, and note the mechanic you're assuming (Mobile Depot, fitting
    service). Use `*_noprop` numbers for cloaky travel.
-8. **Pilot check**: `missing_skills` must be empty for the user's character. If not, give a `skill_plan`.
+9. **Pilot check**: `missing_skills` must be empty for the user's character. If not, give a `skill_plan`.
 
 ## 4. Gotchas
 - Speed, align and signature assume the prop mod is on. Use `max_speed_noprop` etc. for travel and cloaked comparisons.

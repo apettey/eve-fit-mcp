@@ -10,7 +10,7 @@ import sys
 
 from mcp.server.mcpserver import MCPServer
 
-from . import catalog, esi, evaluate, explore, items, optimizer, pilots, ships, skillplan, stats as stats_mod
+from . import ammo, catalog, esi, evaluate, explore, items, matchup, optimizer, pilots, ships, skillplan, stats as stats_mod
 from .fitting import FitError, FitHandle
 from .pyfa_bridge import ROOT, boot, on_engine
 
@@ -36,6 +36,8 @@ EVE Online fitting engine (Pyfa). Typical loop:
    with an objective (metric weights) and constraints for larger searches;
    the result is loaded as a new fit_id - inspect it, tweak, re-optimise with different pools.
 5. applied_dps (vs structure/cruiser_mwd/frigate... at distances) to check application, not just paper DPS.
+   Ammo follows the enemy: recommend_ammo / load_best_ammo per target (max paper DPS only for big/slow targets;
+   state the loaded ammo + intent). matchup_fits vs enemy fits; sweep goal "matchup:<enemy fit_id>@<km>".
 6. save_fit writes .eft (clipboard import) + .xml (file import; Pyfa mangles .eft files) to fits/.
    skill_plan: minimum training plan for one or more fits (EVEMon .emp export).
 Rules of thumb: start from a valid fit; make must-haves constraints or locked slots, not weights;
@@ -50,6 +52,7 @@ EHP uses the fit's damage profile; ehp_vs_<type> gives each damage type. Full gu
 
 mcp = MCPServer("eve-fit", instructions=INSTRUCTIONS)
 _fits = {}
+explore.ENEMY_RESOLVER = lambda fid: _get(fid)
 
 
 def _quiet(fn):
@@ -139,7 +142,7 @@ def list_fits() -> dict:
 def get_fit(fit_id: int) -> dict:
     """EFT text and slot layout of a loaded fit."""
     h = _get(fit_id)
-    return {"fit_id": h.id, "ship": h.ship, "name": h.name, "pilot": h.pilot,
+    return {"fit_id": h.id, "ship": h.ship, "name": h.name, "pilot": h.pilot, "notes": h.fit.notes or "",
             "damage_profile": list(h.damage_profile), "command_links": h.command_links,
             "eft": h.eft(), "slots": h.slots()}
 
@@ -169,7 +172,7 @@ def close_fit(fit_id: int) -> dict:
 
 @_tool
 def set_fit_options(fit_id: int, pilot: str | None = None, damage_profile: str | list[float] | None = None,
-                    command_links: list[dict] | None = None) -> dict:
+                    command_links: list[dict] | None = None, notes: str | None = None) -> dict:
     """Change a fit's pilot, incoming damage profile and/or generic command links.
 
     command_links replaces the current set; pass [] to remove all boosts.
@@ -182,6 +185,8 @@ def set_fit_options(fit_id: int, pilot: str | None = None, damage_profile: str |
         h.set_damage_profile(_profile(damage_profile))
     if command_links is not None:
         h.set_command_links(command_links)
+    if notes is not None:
+        h.fit.notes = notes  # exported as the EVE fitting description in the .xml from save_fit
     out = _summary(h)
     out["delta"] = _delta(before, stats_mod.compute(h), DELTA_KEYS)
     return out
@@ -362,6 +367,43 @@ def get_ship_info(ship: str, pilot: str = "All 5", all_attributes: bool = False,
 
 
 @_tool
+def matchup_fits(fit_id: int, enemy: int | str | dict, distance_km: float = 10, our_count: int = 1,
+                 their_count: int = 1) -> dict:
+    """Fit vs fit: applied DPS both ways (real sig/speed/resists at this range), each side's EHP against the
+    other's actual damage mix, sustained reps, time-to-kill, and ratio = their TTK on us / our TTK on them
+    (> 1 = we win). enemy: a loaded fit_id, EFT text (e.g. from a killmail), {"eft": ..., "pilot": ...} or
+    {"ship": "Basilisk", "prop": "mwd"} (bare hull - weak). Counts model focus fire (e.g. 5 vs 8).
+    To optimise against it, load the enemy fit and use sweep_fit goals like "matchup:<enemy fit_id>@10": "max"."""
+    if isinstance(enemy, int):
+        e = _get(enemy)
+        enemy = {"eft": e.eft(), "pilot": e.pilot, "name": "%s, %s" % (e.ship, e.name)}
+    return matchup.matchup(_get(fit_id), enemy, distance_km, our_count, their_count)
+
+
+@_tool
+def recommend_ammo(fit_id: int, targets: list, distances_km: list[float] | None = None, slot: str | None = None,
+                   charges: list[str] | None = None, top: int = 5) -> dict:
+    """Which ammo applies the most damage to each target at each range (weapon group in `slot`, default the
+    main one). Paper-best ammo (e.g. Rage/Fury) often applies badly to small/fast targets; this shows by how much.
+
+    targets: preset names (cruiser_mwd, frigate, battleship...), real ships {"ship": "Basilisk", "prop": "mwd"
+      (or "ab"/"none"), "speed_factor": 0.4 for webbed}, or enemy fits as EFT text / {"eft": ..., "pilot": ...}
+      (real sig, speed and tank resists). distances_km default [10].
+    Returns per target: best charge, its applied DPS, the max-paper ammo and the % lost by using it, top-N ranking."""
+    return ammo.recommend(_get(fit_id), targets, distances_km or [10], slot, charges, top=top)
+
+
+@_tool
+def load_best_ammo(fit_id: int, target: str | dict | None = None, distance_km: float = 10,
+                   slot: str | None = None, charges: list[str] | None = None) -> dict:
+    """Load the right ammo for a stated purpose into the weapon group and record the intent in the fit notes
+    (saved as the EVE fitting description in the .xml). target=null: maximum paper DPS (structures,
+    battleships); otherwise best applied DPS vs that target (same target forms as recommend_ammo).
+    Mention the loaded ammo and its intent when presenting the fit."""
+    return ammo.load_best(_get(fit_id), target, distance_km, slot, charges)
+
+
+@_tool
 def list_subsystem_layouts(ship: str, pilot: str = "All 5", require: dict | None = None) -> dict:
     """Strategic cruisers (Loki, Legion, Proteus, Tengu): every subsystem combination with its slots,
     turret/launcher hardpoints, CPU/PG, drone bay/bandwidth and bare-hull speed/align/EHP/lock range.
@@ -435,6 +477,8 @@ def sweep_fit(fit_id: int, racks: dict[str, list[str | None]], goals: dict[str, 
       A rack name fills all its unlocked slots (order-insensitive); a slot key fills just that slot.
       null in a pool = leave empty. Rig combos over calibration are skipped automatically.
     goals: e.g. {"dps_total": "max", "max_speed": "max", "align_time": "min"} (default dps_total max).
+      Special goals: "applied:<target preset>@<km>" (applied DPS at range) and
+      "matchup:<enemy fit_id>@<km>" or "...@<km>x<us>v<them>" (win ratio vs a loaded enemy fit).
     constraints: {"weapon_reach": {"min": 40000}, "cap_lasts_s": {"min": 180}} - must hold.
     Returns the non-dominated fits (module counts per rack + stats; EFT for the first include_eft), and
     which index is best on each goal. ~100-150 combos/s; errors if combinations > max_evals.

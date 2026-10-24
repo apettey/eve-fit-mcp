@@ -72,6 +72,7 @@ commit command. If the tests fail after an update, the fix almost always goes in
 - **Item database:** `find_items` (filter by name, category, group, slot, size, hardpoint, meta, market path, role tags, `fits_ship`, `charge_for`, attribute ranges; sort by any attribute), `get_item_info` (all attributes, variations, charges, skills; or a fitted module's modified values), `list_item_tags`, `list_item_groups`
 - **Pilots:** `list_pilots`, `get_pilot`, `save_pilot` (base level + per-skill overrides), `delete_pilot`
 - **Boosts:** `list_command_links`; apply with `command_links` on `load_fit` / `set_fit_options`
+- **Ammo and matchups:** `recommend_ammo` (best applied ammo per enemy and range, vs the max-paper choice), `load_best_ammo` (loads it and records the intent in the fit notes / XML description), `matchup_fits` (fit vs fit: applied DPS, EHP vs the other's damage mix, reps, time to kill, win ratio, N vs M; also a `sweep_fit` goal)
 - **Integration:** `evaluate_fit` (stateless, versioned contract), `set_pilot_skills` (named pilot from another tool's skill list)
 - **ESI (standalone fallback):** `esi_app_info`, `esi_login`, `esi_login_status`, `esi_login_complete`, `esi_refresh_skills`, `esi_list_fittings`, `esi_import_fitting`, `esi_logout`
 - **Optimisation:** `optimize_fit`, `list_metrics`

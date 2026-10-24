@@ -86,6 +86,7 @@ class FitHandle:
         """New handle from `eft` with this fit's pilot, damage profile and command links
         (none of which EFT carries)."""
         h = FitHandle(eft, self.pilot, self.damage_profile, drones_active=True, command_links=self.command_links)
+        h.fit.notes = self.fit.notes  # intent notes (e.g. ammo choice) aren't in EFT either
         if name:
             h.fit.name = name
         return h

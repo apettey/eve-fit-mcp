@@ -13,6 +13,9 @@ from . import catalog, stats as stats_mod
 from .errors import FitError
 from .pyfa_bridge import P, lock
 
+# Set by the server so sweep goals can refer to loaded enemy fits by fit_id (matchup:<id>@<km>).
+ENEMY_RESOLVER = None
+
 DEFAULT_REPORT = ["dps_total", "volley", "weapon_optimal", "weapon_falloff", "max_speed", "align_time",
                   "signature", "ehp_total", "tank_sustained", "cap_lasts_s", "cpu_used", "cpu_total",
                   "pg_used", "pg_total", "calibration_used", "calibration_total"]
@@ -83,6 +86,17 @@ def sweep(handle, racks, goals=None, constraints=None, report=None, locked=(), m
             raise FitError("goal directions must be 'max' or 'min'")
     report = list(dict.fromkeys(list(goals) + list(constraints or {}) + list(report or DEFAULT_REPORT)))
     noprop = any(k.endswith("_noprop") for k in report)
+    matchup_specs = {}
+    for k in report:
+        if k.startswith("matchup:"):
+            import re
+            m = re.match(r"^matchup:(\d+)@([\d.]+)(?:x(\d+)v(\d+))?$", k)
+            if not m or ENEMY_RESOLVER is None:
+                raise FitError("matchup goals look like matchup:<enemy fit_id>@<km> or "
+                               "matchup:<enemy fit_id>@<km>x<our count>v<their count>")
+            enemy = ENEMY_RESOLVER(int(m.group(1)))
+            matchup_specs[k] = ({"eft": enemy.eft(), "pilot": enemy.pilot, "name": "%s, %s" % (enemy.ship, enemy.name)},
+                                float(m.group(2)), int(m.group(3) or 1), int(m.group(4) or 1))
     applied_keys = [k for k in report if k.startswith("applied:")]
     applied_specs = {}
     for k in applied_keys:
@@ -136,6 +150,10 @@ def sweep(handle, racks, goals=None, constraints=None, report=None, locked=(), m
                     from . import application
                     for k, (tgt, km) in applied_specs.items():
                         s[k] = application.applied_dps(work, [tgt], [km])["results"][0]["applied_dps"]
+                if matchup_specs:
+                    from . import matchup as matchup_mod
+                    for k, (spec, km, ours, theirs) in matchup_specs.items():
+                        s[k] = matchup_mod.ratio(work, spec, km, ours, theirs)
                 evaluated += 1
                 if not s["valid"]:
                     invalid += 1
