@@ -1,0 +1,3 @@
+[submodule "vendor/pyfa"]
+	path = vendor/pyfa
+	url = https://github.com/pyfa-org/Pyfa.git

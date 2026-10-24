@@ -1,0 +1,42 @@
+[project]
+name = "eve-fit-mcp"
+version = "0.1.0"
+description = "MCP server wrapping Pyfa's fitting engine for iterative EVE Online fit optimisation"
+requires-python = ">=3.12"
+license = "GPL-3.0-or-later"  # links against Pyfa (GPLv3)
+# Pyfa's runtime deps (see vendor/pyfa/pyproject.toml) minus matplotlib/pyinstaller, plus the MCP SDK.
+# wxPython is needed only because Pyfa's service layer imports it; no window is ever created.
+dependencies = [
+    "mcp>=2.3",
+    "logbook==1.9.2",
+    "numpy",
+    "python-dateutil",
+    "requests",
+    "sqlalchemy==2.0.51",
+    "cryptography",
+    "markdown2",
+    "packaging",
+    "roman",
+    "beautifulsoup4",
+    "pyyaml",
+    "python-jose",
+    "requests-cache",
+    "wxPython==4.3.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "anyio"]
+
+[project.scripts]
+eve-fit-mcp = "eve_fit_mcp.server:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["eve_fit_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
