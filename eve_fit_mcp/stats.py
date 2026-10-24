@@ -36,6 +36,13 @@ METRICS = {
     "cap_lasts_s": "Seconds until cap empty (1e9 if stable)",
     "cap_delta": "Cap recharge minus usage, GJ/s",
     "max_speed": "Max velocity m/s (prop mod active)",
+    "max_speed_noprop": "Max velocity m/s with prop mods off (cloaky travel, kiting w/o MWD)",
+    "align_time_noprop": "Align time s with prop mods off", "signature_noprop": "Signature m with prop mods off",
+    "volley_weapon": "Weapon-only alpha", "volley_drone": "Drone-only alpha",
+    "ehp_vs_<type>": "EHP against pure em/thermal/kinetic/explosive damage",
+    "missile_explosion_radius": "Largest missile explosion radius m (lower applies better)",
+    "missile_explosion_velocity": "Slowest missile explosion velocity m/s (higher applies better)",
+    "cargo_used": "Cargo m3 used", "cargo_total": "Cargo capacity m3",
     "align_time": "Align time s (lower is better)",
     "signature": "Signature radius m (lower is better)",
     "warp_speed": "Warp speed AU/s",
@@ -53,7 +60,7 @@ def _a(fit, attr, default=0.0):
     return float(v) if v is not None else default
 
 
-def compute(handle, skills_check=False):
+def compute(handle, skills_check=False, noprop=False):
     fit = handle.fit
     with lock():
         s = {}
@@ -68,9 +75,11 @@ def compute(handle, skills_check=False):
         s["dps_weapon"] = float(fit.getWeaponDps().total)
         s["dps_drone"] = float(fit.getDroneDps().total)
         s["volley"] = float(fit.getTotalVolley().total)
+        s["volley_weapon"] = float(fit.getWeaponVolley().total)
+        s["volley_drone"] = float(fit.getDroneVolley().total)
 
         # Weapon reach: worst (shortest) across fitted damage-dealing turrets/launchers
-        optimal, falloff, tracking = [], [], []
+        optimal, falloff, tracking, exp_radius, exp_velocity = [], [], [], [], []
         for mod in fit.modules:
             if mod.isEmpty or mod.hardpoint not in (P.FittingHardpoint.TURRET, P.FittingHardpoint.MISSILE):
                 continue
@@ -80,10 +89,15 @@ def compute(handle, skills_check=False):
             falloff.append(float(mod.falloff or 0))
             if mod.hardpoint == P.FittingHardpoint.TURRET:
                 tracking.append(float(mod.getModifiedItemAttr("trackingSpeed") or 0))
+            elif mod.charge is not None:
+                exp_radius.append(float(mod.getModifiedChargeAttr("aoeCloudSize") or 0))
+                exp_velocity.append(float(mod.getModifiedChargeAttr("aoeVelocity") or 0))
         s["weapon_optimal"] = min(optimal) if optimal else 0.0
         s["weapon_falloff"] = min(falloff) if falloff else 0.0
         s["weapon_reach"] = s["weapon_optimal"] + s["weapon_falloff"]
         s["weapon_tracking"] = min(tracking) if tracking else 0.0
+        s["missile_explosion_radius"] = max(exp_radius) if exp_radius else 0.0
+        s["missile_explosion_velocity"] = min(exp_velocity) if exp_velocity else 0.0
 
         # Defense
         ehp = fit.ehp or {k: 0.0 for k in LAYERS}
@@ -95,6 +109,8 @@ def compute(handle, skills_check=False):
             s["resist_avg_" + layer] = sum(s["resist_%s_%s" % (layer, d)] for d in DMG) / 4
         s["ehp_total"] = sum(s["ehp_" + l] for l in LAYERS)
         s["hp_total"] = float(sum(hp.get(l, 0) for l in LAYERS))
+        for dmg in DMG:  # EHP against a single damage type, without changing the fit's profile
+            s["ehp_vs_" + dmg] = float(sum(P.DamagePattern.oneType(dmg).calculateEhp(fit.ship).values()))
         sus = fit.effectiveSustainableTank or {}
         burst = fit.effectiveTank or {}
         regen = float(sus.get("passiveShield", 0) or 0)
@@ -130,6 +146,7 @@ def compute(handle, skills_check=False):
             "calibration": (fit.calibrationUsed, _a(fit, "upgradeCapacity")),
             "drone_bandwidth": (fit.droneBandwidthUsed, _a(fit, "droneBandwidth")),
             "drone_bay": (fit.droneBayUsed, _a(fit, "droneCapacity")),
+            "cargo": (fit.cargoBayUsed, _a(fit, "capacity")),
         }
         issues = []
         for k, (used, total) in res.items():
@@ -168,7 +185,30 @@ def compute(handle, skills_check=False):
         s["valid"] = not any(not i.endswith("is offline") for i in issues)
         if skills_check:
             s["missing_skills"] = pilots.missing_skills(fit)
+        if noprop:
+            s.update(_noprop(handle))
         return s
+
+
+def _noprop(handle):
+    """Speed/align/signature with prop modules (MWD/AB/MJD...) switched off, e.g. cloaky travel."""
+    fit = handle.fit
+    props = [m for m in fit.modules if not m.isEmpty and m.item.group.name == "Propulsion Module"
+             and m.state >= P.FittingModuleState.ACTIVE]
+    if not props:
+        return {"max_speed_noprop": float(fit.maxSpeed or 0), "align_time_noprop": float(fit.alignTime or 0),
+                "signature_noprop": _a(fit, "signatureRadius")}
+    states = [m.state for m in props]
+    try:
+        for m in props:
+            m.state = P.FittingModuleState.ONLINE
+        handle.recalc()
+        return {"max_speed_noprop": float(fit.maxSpeed or 0), "align_time_noprop": float(fit.alignTime or 0),
+                "signature_noprop": _a(fit, "signatureRadius")}
+    finally:
+        for m, st in zip(props, states):
+            m.state = st
+        handle.recalc()
 
 
 ROUND_SKIP = {"cap_lasts_s"}

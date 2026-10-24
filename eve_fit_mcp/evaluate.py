@@ -32,6 +32,10 @@ UNITS = {
     "max_speed": "m/s", "align_time": "s", "signature": "m", "warp_speed": "AU/s",
     "lock_range": "m", "scan_res": "mm", "sensor_strength": "points", "max_targets": "count",
     "mining_yield": "m3/s",
+    "volley_weapon": "HP", "volley_drone": "HP", "ehp_vs_<em|thermal|kinetic|explosive>": "HP",
+    "missile_explosion_radius": "m", "missile_explosion_velocity": "m/s",
+    "max_speed_noprop": "m/s", "align_time_noprop": "s", "signature_noprop": "m",
+    "cargo_used": "m3", "cargo_total": "m3", "cargo_free": "m3",
     "cpu_used": "tf", "cpu_total": "tf", "cpu_free": "tf",
     "pg_used": "MW", "pg_total": "MW", "pg_free": "MW",
     "calibration_used": "points", "calibration_total": "points", "calibration_free": "points",
@@ -129,7 +133,7 @@ def evaluate(eft, skills=None, pilot=None, implants=None, boosters=None, damage_
             h = FitHandle(eft, who, _profile(damage_profile), drones_active, command_links)
             try:
                 extra = _add_implants(h, implants, boosters)
-                s = stats_mod.compute(h, skills_check=True)
+                s = stats_mod.compute(h, skills_check=True, noprop=True)
             finally:
                 h.close()
         wanted = set(metrics) if metrics else None

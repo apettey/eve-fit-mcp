@@ -73,9 +73,10 @@ class Scorer:
 
 
 class Search:
-    def __init__(self, handle, scorer, log):
+    def __init__(self, handle, scorer, log, noprop=False):
         self.h = handle
         self.scorer = scorer
+        self.noprop = noprop
         self.cache = {}
         self.evals = 0
         self.log = log
@@ -84,7 +85,7 @@ class Search:
         sig = self.h.signature()
         hit = self.cache.get(sig)
         if hit is None:
-            s = stats_mod.compute(self.h)
+            s = stats_mod.compute(self.h, noprop=self.noprop)
             hit = (self.scorer.score(s), s)
             self.cache[sig] = hit
             self.evals += 1
@@ -156,10 +157,11 @@ def optimize(handle, objective, constraints=None, slots="all", mode="variants", 
     t0 = time.time()
     work = handle.clone(name=handle.name)
     try:
-        baseline = stats_mod.compute(work)
+        noprop = any(k.endswith("_noprop") for k in list(objective) + list(constraints or {}))
+        baseline = stats_mod.compute(work, noprop=noprop)
         scorer = Scorer(objective, constraints, baseline, normalize)
         log = []
-        search = Search(work, scorer, log)
+        search = Search(work, scorer, log, noprop)
         start_score, _ = search.evaluate()
 
         keys = [k for k in _select_keys(work, slots) if k not in set(locked or ())]

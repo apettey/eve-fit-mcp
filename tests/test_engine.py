@@ -94,6 +94,7 @@ def test_drones_launched_within_limits():
     assert stats.compute(again)["dps_drone"] == pytest.approx(s["dps_drone"])
     assert stats.compute(h.clone())["dps_drone"] == pytest.approx(s["dps_drone"])
     # manual state survives cloning even when it differs from the default activation
+    h.auto_drones = False  # manual drone states: stop automatic relaunching
     for d in h.fit.drones:
         d.amountActive = 5 if d.item.typeName == "Hobgoblin II" else 0
     h.recalc()

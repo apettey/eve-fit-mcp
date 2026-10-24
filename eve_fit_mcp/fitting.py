@@ -61,6 +61,8 @@ class FitHandle:
             # leave orphans for SQLAlchemy to flush. We wire the owner links SQLAlchemy would set.
             self.fit = fit
             self.id = next(_fit_ids)
+            self.auto_drones = False  # True: relaunch drones automatically when bandwidth/limits change
+            self._fixing_drones = False
             self.pilot = pilots.canonical(pilot)
             self.set_damage_profile(damage_profile, recalc=False)
             self.set_command_links(command_links, recalc=False)
@@ -68,6 +70,7 @@ class FitHandle:
             self._wire()
             self.recalc()
             if drones_active:
+                self.auto_drones = True
                 self.activate_drones()
 
     # ---- lifecycle -------------------------------------------------------------------------
@@ -93,6 +96,7 @@ class FitHandle:
         for d in self.fit.drones:
             active.setdefault(d.item.ID, []).append(d.amountActive)
         h = self.derive(self.eft(), name)
+        h.auto_drones = self.auto_drones
         for d in h.fit.drones:
             stack = active.get(d.item.ID)
             d.amountActive = stack.pop(0) if stack else 0
@@ -108,6 +112,14 @@ class FitHandle:
             self._wire()  # free()/replace() create modules with no owner
             self.fit.clear()
             self.fit.calculateModifiedAttributes()
+            # e.g. an Interdiction Nullifier halves bandwidth: relaunch within the new limits
+            if self.auto_drones and not self._fixing_drones and self.fit.drones:
+                if self._drone_plan() != [d.amountActive for d in self.fit.drones]:
+                    self._fixing_drones = True
+                    try:
+                        self.activate_drones()
+                    finally:
+                        self._fixing_drones = False
 
     @property
     def name(self):
@@ -243,6 +255,12 @@ class FitHandle:
             self.fit.modules.free(pos)
             self.fit.modules.replace(pos, new)
             new.owner = self.fit  # fits() relies on this; Pyfa gets it from a DB flush
+            if slot_name(new.slot) == "subsystem":
+                # T3C subsystems change the slot layout: recalc so the new slot counts exist, then
+                # add/remove empty slots (fitted modules beyond the new layout show up as issues)
+                self.recalc()
+                self.fit.fill()
+                self._wire()
             if check and not new.fits(self.fit):
                 # slot/hardpoint/max-group limits - revert like Pyfa's replace command does
                 self.restore_module(key, info_before, recalc=recalc)
@@ -265,22 +283,28 @@ class FitHandle:
             elif not mod.isValidState(mod.state):
                 mod.state = P.FittingModuleState.ONLINE
 
+    def _drone_plan(self):
+        """Active count per drone stack: heaviest first within bandwidth and max-active limits."""
+        slots_left = int(self.fit.extraAttributes["maxActiveDrones"] or 0)
+        bw_left = float(self.fit.ship.getModifiedItemAttr("droneBandwidth") or 0)
+        plan = {}
+        for d in sorted(self.fit.drones, key=lambda d: -float(d.getModifiedItemAttr("droneBandwidthUsed") or 0)):
+            bw = float(d.getModifiedItemAttr("droneBandwidthUsed") or 0)
+            n = d.amount if bw <= 0 else min(d.amount, int(bw_left // bw + 1e-9))
+            n = max(0, min(n, slots_left))
+            plan[id(d)] = n
+            slots_left -= n
+            bw_left -= n * bw
+        return [plan[id(d)] for d in self.fit.drones]
+
     def activate_drones(self):
         """Launch drones, heaviest stacks first, up to bandwidth and max-active limits.
 
         EFT import leaves drones docked; heaviest-first is order independent (EFT export re-sorts the bay)
         and usually the highest-DPS choice. Use set_drones for exact control."""
         with lock():
-            slots_left = int(self.fit.extraAttributes["maxActiveDrones"] or 0)
-            bw_left = float(self.fit.ship.getModifiedItemAttr("droneBandwidth") or 0)
-            stacks = sorted(self.fit.drones, key=lambda d: -float(d.getModifiedItemAttr("droneBandwidthUsed") or 0))
-            for d in stacks:
-                bw = float(d.getModifiedItemAttr("droneBandwidthUsed") or 0)
-                n = d.amount if bw <= 0 else min(d.amount, int(bw_left // bw + 1e-9))
-                n = max(0, min(n, slots_left))
+            for d, n in zip(self.fit.drones, self._drone_plan()):
                 d.amountActive = n
-                slots_left -= n
-                bw_left -= n * bw
             self.recalc()
 
     def set_drones(self, drones, recalc=True):
@@ -296,6 +320,7 @@ class FitHandle:
                 d.amount = int(count)
                 self.fit.drones.append(d)
                 d.owner = self.fit
+            self.auto_drones = True
             self.recalc()
             self.activate_drones()
 

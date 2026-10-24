@@ -82,6 +82,7 @@ def sweep(handle, racks, goals=None, constraints=None, report=None, locked=(), m
         if d not in ("max", "min"):
             raise FitError("goal directions must be 'max' or 'min'")
     report = list(dict.fromkeys(list(goals) + list(constraints or {}) + list(report or DEFAULT_REPORT)))
+    noprop = any(k.endswith("_noprop") for k in report)
     t0 = time.time()
     with lock():
         work = handle.clone()
@@ -122,7 +123,7 @@ def sweep(handle, racks, goals=None, constraints=None, report=None, locked=(), m
                 except FitError:
                     failed += 1
                     continue
-                s = stats_mod.compute(work)
+                s = stats_mod.compute(work, noprop=noprop)
                 evaluated += 1
                 if not s["valid"]:
                     invalid += 1

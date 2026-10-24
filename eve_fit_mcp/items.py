@@ -318,6 +318,11 @@ def resolve_attr(name):
 _OPS = {"min": lambda v, x: v >= x, "max": lambda v, x: v <= x, "eq": lambda v, x: v == x}
 
 
+def slot_name_of(mod):
+    from .fitting import slot_name
+    return slot_name(mod.slot)
+
+
 def _ship_fit(ship):
     from .fitting import FitHandle
     cache = _ship_fit.__dict__.setdefault("cache", {})
@@ -326,14 +331,38 @@ def _ship_fit(ship):
     return cache[ship]
 
 
-def _fits_ship(entry, item, handle):
+def _fits_ship(entry, item, handle, layout_known=False):
+    """Could this item be fitted to the ship (ignoring what's already fitted)?
+
+    Bare T3C hulls have no slots until subsystems are fitted, so for them slot/hardpoint counts are
+    skipped unless layout_known (a real fit with subsystems was given)."""
     fit = handle.fit
     if entry["category"] in ("Module", "Structure Module", "Subsystem"):
         try:
             mod = P.Module(item)
         except ValueError:
             return False
-        return bool(mod.fits(fit))
+        t3c = (fit.ship.getModifiedItemAttr("maxSubSystems") or 0) > 0
+        if not t3c and not layout_known:
+            return bool(mod.fits(fit))
+        if not fit.canFit(item):
+            return False
+        slot = slot_name_of(mod)
+        if slot == "rig" and _attr(item, "rigSize") != fit.ship.getModifiedItemAttr("rigSize"):
+            return False
+        if slot == "subsystem":
+            return True
+        if (fit.ship.getModifiedItemAttr("isCapitalSize") or 0) != 1 and mod.isCapitalSize:
+            return False
+        if layout_known:
+            if slot and not fit.getNumSlots(mod.slot):
+                return False
+            hp = entry.get("hardpoint")
+            if hp == "turret" and not fit.ship.getModifiedItemAttr("turretSlotsLeft"):
+                return False
+            if hp == "launcher" and not fit.ship.getModifiedItemAttr("launcherSlotsLeft"):
+                return False
+        return True
     if entry["category"] == "Drone":
         bw = fit.ship.getModifiedItemAttr("droneBandwidth") or 0
         return bw >= (_attr(item, "droneBandwidthUsed") or 0) > 0 or bw > 0 and not _attr(item, "droneBandwidthUsed")
@@ -344,7 +373,7 @@ def _fits_ship(entry, item, handle):
 
 def find(query=None, category=None, group=None, slot=None, size=None, hardpoint=None, meta_groups=None,
          tags=None, any_tags=None, market=None, fits_ship=None, charge_for=None, attributes=None,
-         sort_by=None, descending=True, include_attributes=None, usable_by=None, limit=30):
+         sort_by=None, descending=True, include_attributes=None, usable_by=None, limit=30, fit_handle=None):
     """Filter the item index. All text filters are case-insensitive substrings unless noted.
 
     tags: all must match; any_tags: at least one. attributes: {"cpu": {"max": 30}, "Damage Modifier": {"min": 1.1}}
@@ -395,7 +424,8 @@ def find(query=None, category=None, group=None, slot=None, size=None, hardpoint=
         if sort_by and sort_by not in ("cpu", "pg", "calibration", "meta_level", "name"):
             sort_attr = resolve_attr(sort_by)
         shown = [resolve_attr(a) for a in (include_attributes or ())]
-        handle = _ship_fit(fits_ship) if fits_ship else None
+        handle = fit_handle or (_ship_fit(fits_ship) if fits_ship else None)
+        layout_known = fit_handle is not None
         charge_mod = None
         if charge_for:
             from .fitting import get_item
@@ -422,7 +452,7 @@ def find(query=None, category=None, group=None, slot=None, size=None, hardpoint=
                     continue
             if charge_mod is not None and not charge_mod.isValidCharge(item):
                 continue
-            if handle is not None and not _fits_ship(e, item, handle):
+            if handle is not None and not _fits_ship(e, item, handle, layout_known):
                 continue
             if char is not None and not pilots.can_use(char, item):
                 continue

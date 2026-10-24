@@ -35,12 +35,18 @@ EVE Online fitting engine (Pyfa). Typical loop:
    make_variant (batch changes -> new fit, e.g. refit modes), or optimize_fit (weighted greedy search)
    with an objective (metric weights) and constraints for larger searches;
    the result is loaded as a new fit_id - inspect it, tweak, re-optimise with different pools.
-5. save_fit writes EFT into the fits/ library (paste straight into EVE).
-Slots are addressed as 'high:0', 'med:1', 'low:2', 'rig:0'. Metrics: see list_metrics.
-Pilots: 'All 5' (default) .. 'All 0', custom skill sets (save_pilot) or real characters via
-esi_login. With a pilot below All 5 the optimiser only picks modules/ammo the pilot can use.
+5. applied_dps (vs structure/cruiser_mwd/frigate... at distances) to check application, not just paper DPS.
+6. save_fit writes .eft (clipboard import) + .xml (file import; Pyfa mangles .eft files) to fits/.
+   skill_plan: minimum training plan for one or more fits (EVEMon .emp export).
+Rules of thumb: start from a valid fit; make must-haves constraints or locked slots, not weights;
+present trade-off fronts; utility slots (cloak, probes, nos) are your call - lock them.
+Speed/align/signature assume prop mods on; *_noprop metrics are with them off (cloaky travel).
+T3C: list_subsystem_layouts, get_ship_info(subsystems=...), find_items(fits_fit=fit_id).
+Slots are addressed as 'high:0', 'med:1', 'low:2', 'rig:0', 'subsystem:1'. Metrics: see list_metrics.
+Pilots: 'All 5' (default) .. 'All 0', custom skill sets (save_pilot), imported skills (set_pilot_skills)
+or esi_login. With a pilot below All 5 the optimiser only picks modules/ammo the pilot can use.
 Command boosts: generic links per fit (list_command_links, set_fit_options command_links).
-EHP uses the fit's damage profile."""
+EHP uses the fit's damage profile; ehp_vs_<type> gives each damage type. Full guide: docs/AGENT_GUIDE.md."""
 
 mcp = MCPServer("eve-fit", instructions=INSTRUCTIONS)
 _fits = {}
@@ -142,7 +148,7 @@ def get_fit(fit_id: int) -> dict:
 def get_stats(fit_id: int, metrics: list[str] | None = None, full: bool = False) -> dict:
     """Stats for a fit. full=True returns every metric (resists per type, resources, etc.)."""
     h = _get(fit_id)
-    s = stats_mod.compute(h, skills_check=True)
+    s = stats_mod.compute(h, skills_check=True, noprop=True)
     return s if full else stats_mod.summarize(s, metrics)
 
 
@@ -293,7 +299,7 @@ def find_items(query: str | None = None, category: str | None = None, group: str
                any_tags: list[str] | None = None, market: str | None = None, fits_ship: str | None = None,
                charge_for: str | None = None, attributes: dict | None = None, sort_by: str | None = None,
                descending: bool = True, include_attributes: list[str] | None = None,
-               usable_by: str | None = None, limit: int = 30) -> dict:
+               usable_by: str | None = None, limit: int = 30, fits_fit: int | None = None) -> dict:
     """Search the item database with filters. Text filters are case-insensitive substrings.
 
     query: words in the name. category: Module/Charge/Drone/Implant/Subsystem/Fighter/Ship.
@@ -301,14 +307,17 @@ def find_items(query: str | None = None, category: str | None = None, group: str
     meta_groups: e.g. ["Tech II", "Faction"]. market: substring of the market path (e.g. "Microwarpdrives").
     tags: role hints that must all match, e.g. ["speed"], ["tackle", "point"], ["ammo:long-range"];
         any_tags: at least one. See list_item_tags for the vocabulary.
-    fits_ship: only items that ship can fit (slots, hardpoints, rig size, restrictions).
+    fits_ship: only items that ship can fit (slots, hardpoints, rig size, restrictions; for T3C hulls the
+      slot layout is ignored). fits_fit: a fit_id - only items that fit that fit's actual layout
+      (e.g. a T3C with its subsystems).
     charge_for: only charges/scripts that module can load.
     attributes: dogma filters by name or display name, e.g. {"cpu": {"max": 30}, "Damage Modifier": {"min": 1.1}}.
     sort_by: attribute (e.g. "damageMultiplier", "maxVelocity") or cpu/pg/meta_level/name.
     include_attributes: extra attribute values to return per item. usable_by: pilot - only items they can use.
     Returns {total, returned, items}; each item has slot/size/meta/cpu/pg/tags/market_path."""
     return items.find(query, category, group, slot, size, hardpoint, meta_groups, tags, any_tags, market,
-                      fits_ship, charge_for, attributes, sort_by, descending, include_attributes, usable_by, limit)
+                      fits_ship, charge_for, attributes, sort_by, descending, include_attributes, usable_by, limit,
+                      fit_handle=_get(fits_fit) if fits_fit is not None else None)
 
 
 @_tool
@@ -344,11 +353,34 @@ def list_item_groups(category: str | None = None, query: str | None = None) -> d
 
 
 @_tool
-def get_ship_info(ship: str, pilot: str = "All 5", all_attributes: bool = False) -> dict:
+def get_ship_info(ship: str, pilot: str = "All 5", all_attributes: bool = False,
+                  subsystems: list[str] | None = None) -> dict:
     """Hull reference: slots, hardpoints, fitting resources, HP/resists, cap, navigation, targeting,
     drone/cargo capacity, bonuses text and required skills. Values show base and with the pilot's skills.
     all_attributes=true adds every dogma attribute (display name, unit, base, with_skills)."""
-    return ships.ship_info(ship, pilot, all_attributes)
+    return ships.ship_info(ship, pilot, all_attributes, subsystems)
+
+
+@_tool
+def list_subsystem_layouts(ship: str, pilot: str = "All 5", require: dict | None = None) -> dict:
+    """Strategic cruisers (Loki, Legion, Proteus, Tengu): every subsystem combination with its slots,
+    turret/launcher hardpoints, CPU/PG, drone bay/bandwidth and bare-hull speed/align/EHP/lock range.
+    require filters, e.g. {"subsystem": "Covert Reconfiguration", "launcher": 5, "med": 4}."""
+    return ships.subsystem_layouts(ship, pilot, require)
+
+
+@_tool
+def applied_dps(fit_id: int, targets: list | None = None, distances_km: list[float] | None = None,
+                target_angle: float = 90.0) -> dict:
+    """Applied DPS vs moving targets (Pyfa's damage-graph maths): missile explosion radius/velocity, turret
+    tracking and optimal/falloff, drones and lock range, against target signature, speed and resists.
+
+    targets: preset names (structure, battleship, battlecruiser, cruiser, cruiser_mwd, cruiser_webbed,
+      destroyer, frigate, frigate_mwd) or {"name", "sig", "speed", "resists": [em, th, kin, exp]} or
+      {"preset": "cruiser_mwd", "speed": 1200}. distances_km: default [10]. Attacker stationary."""
+    from . import application
+    return application.applied_dps(_get(fit_id), targets or list(application.TARGET_PRESETS),
+                                   distances_km or [10], target_angle)
 
 
 @_tool
