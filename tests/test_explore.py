@@ -97,3 +97,27 @@ def test_save_fit_writes_importable_xml(tmp_path, monkeypatch):
     kind, _, data = P.Port.importAuto(text, out["xml_path"])  # Pyfa's file-import path
     assert kind == "XML"
     assert len([m for m in data[0].modules if not m.isEmpty]) == 19
+
+
+def test_skill_plan_minimum_and_evemon(tmp_path):
+    import gzip
+    import xml.etree.ElementTree as ET
+    from eve_fit_mcp import skillplan
+    from eve_fit_mcp.pyfa_bridge import P
+    plan = skillplan.build([HURRICANE])
+    assert plan["fitting_skills_added"] == {"Power Grid Management": 5, "Advanced Weapon Upgrades": 4}
+    assert plan["verification"][0]["valid"] and not plan["verification"][0]["missing_skills"]
+    files = skillplan.save(plan, "Test", str(tmp_path))
+    xml = gzip.open(files["emp"]).read()
+    assert xml == open(files["xml"], "rb").read()
+    entries = list(ET.fromstring(xml).iter("entry"))
+    assert len(entries) == len(plan["entries"])
+    have = {}
+    for e in entries:  # every prerequisite level precedes the skill that needs it
+        sid, lvl = int(e.get("skillID")), int(e.get("level"))
+        assert lvl == have.get(sid, 0) + 1
+        for req, need in P.market.getItem(sid).requiredSkills.items():
+            assert have.get(req.ID, 0) >= need
+        have[sid] = lvl
+    with pytest.raises(FitError, match="Unknown item"):
+        skillplan.build([HURRICANE.replace("Gyrostabilizer II", "Gyrostabilizer Ultra")])

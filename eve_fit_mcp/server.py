@@ -10,7 +10,7 @@ import sys
 
 from mcp.server.mcpserver import MCPServer
 
-from . import catalog, esi, evaluate, explore, items, optimizer, pilots, ships, stats as stats_mod
+from . import catalog, esi, evaluate, explore, items, optimizer, pilots, ships, skillplan, stats as stats_mod
 from .fitting import FitError, FitHandle
 from .pyfa_bridge import ROOT, boot, on_engine
 
@@ -435,6 +435,29 @@ def make_variant(fit_id: int, changes: list[dict], name: str | None = None) -> d
     before, after = stats_mod.compute(base), stats_mod.compute(new, skills_check=True)
     return {"fit_id": new.id, "warnings": warnings, "delta": _delta(before, after, DELTA_KEYS),
             "stats": stats_mod.summarize(after)}
+
+
+@_tool
+def skill_plan(fit_ids: list[int] | None = None, efts: list[str] | None = None, start_pilot: str | None = None,
+               include_cargo: bool = True, attributes: dict[str, int] | None = None,
+               save_as: str | None = None) -> dict:
+    """Minimum training plan to fly and fit one or more fits (e.g. all refit modes of a ship together).
+
+    Includes every required skill and prerequisite (ship, subsystems, modules, loaded charges, drones and,
+    with include_cargo, cargo modules/ammo), plus the cheapest fitting-skill levels that make every fit fit
+    CPU/PG; verified with the engine. start_pilot: plan only what that pilot lacks (default: from zero).
+    attributes: {"perception": 27, "willpower": 21, ...} (default 20 each, no implants).
+    save_as: name -> writes '<name> - skill plan.emp/.xml/.md' to fits/ (EVEMon: Plan > Import Plan from File).
+    Returns per-level entries (skill, level, type Planned/Prerequisite, SP, time), totals and verification."""
+    texts = list(efts or [])
+    for fid in fit_ids or ():
+        texts.append(_get(fid).eft())
+    if not texts:
+        raise FitError("give fit_ids and/or efts")
+    plan = skillplan.build(texts, start_pilot, attributes, include_cargo)
+    if save_as:
+        plan["files"] = skillplan.save(plan, save_as, FITS_DIR)
+    return plan
 
 
 # ---- library ------------------------------------------------------------------------------------
