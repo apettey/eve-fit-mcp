@@ -73,10 +73,11 @@ class Scorer:
 
 
 class Search:
-    def __init__(self, handle, scorer, log, noprop=False):
+    def __init__(self, handle, scorer, log, noprop=False, specials=None):
         self.h = handle
         self.scorer = scorer
         self.noprop = noprop
+        self.specials = specials
         self.cache = {}
         self.evals = 0
         self.log = log
@@ -86,6 +87,11 @@ class Search:
         hit = self.cache.get(sig)
         if hit is None:
             s = stats_mod.compute(self.h, noprop=self.noprop)
+            if self.specials and s["valid"]:  # fleet/matchup/applied goals: only worth computing on valid fits
+                self.specials.compute(self.h, s)
+            elif self.specials:
+                for k in self.specials.keys:
+                    s[k] = -1e9
             hit = (self.scorer.score(s), s)
             self.cache[sig] = hit
             self.evals += 1
@@ -158,10 +164,16 @@ def optimize(handle, objective, constraints=None, slots="all", mode="variants", 
     work = handle.clone(name=handle.name)
     try:
         noprop = any(k.endswith("_noprop") for k in list(objective) + list(constraints or {}))
+        from .goals import Specials
+        specials = Specials(list(objective) + list(constraints or {}))
         baseline = stats_mod.compute(work, noprop=noprop)
+        if specials:
+            specials.compute(work, baseline)
+            if any(k in specials.keys for k in objective):
+                normalize = False  # fleet/matchup scores can be <= 0: weights apply to raw values
         scorer = Scorer(objective, constraints, baseline, normalize)
         log = []
-        search = Search(work, scorer, log, noprop)
+        search = Search(work, scorer, log, noprop, specials)
         start_score, _ = search.evaluate()
 
         keys = [k for k in _select_keys(work, slots) if k not in set(locked or ())]

@@ -75,6 +75,7 @@ commit command. If the tests fail after an update, the fix almost always goes in
 - **Ammo and matchups:** `recommend_ammo` (best applied ammo per enemy and range, vs the max-paper choice), `load_best_ammo` (loads it and records the intent in the fit notes / XML description), `matchup_fits` (fit vs fit: applied DPS, EHP vs the other's damage mix, reps, time to kill, win ratio, N vs M; also a `sweep_fit` goal)
 - **Enemy doctrines:** `save_doctrine` (pasted EFTs, killmail fits merged per hull, or eve-esi doctrine bundles from zKillboard and battle reports), `analyze_doctrine`, `list_doctrines`, `delete_doctrine`, `merge_fits`, `load_doctrine_ship`, `matchup_vs_doctrine`, `matchup_envelope`
 - **Fleet fights:** `fleet_battle` (our fleet vs a doctrine: logi reps on the primary, ECM jam chances, fleet tackle, focus fire with target switching, kill timeline and the best kill order per range, with insights)
+- **Counter fits:** `counter_fit` (search a hull's fit to maximise fleet-battle outcomes against a saved doctrine, with support ships and real pilot skills; before/after battles, changes and the score/DPS/EHP alternatives); goal `fleet:<doctrine>@<km>x<count>` in `sweep_fit`/`optimize_fit`
 - **Integration:** `evaluate_fit` (stateless, versioned contract), `set_pilot_skills` (named pilot from another tool's skill list)
 - **ESI (standalone fallback):** `esi_app_info`, `esi_login`, `esi_login_status`, `esi_login_complete`, `esi_refresh_skills`, `esi_list_fittings`, `esi_import_fitting`, `esi_logout`
 - **Optimisation:** `optimize_fit`, `list_metrics`

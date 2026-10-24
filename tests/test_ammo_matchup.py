@@ -128,7 +128,8 @@ def test_matchup_mirror_and_counts(nighthawk):
 
 def test_sweep_can_optimise_against_an_enemy(nighthawk, monkeypatch):
     enemy = FitHandle(NIGHTHAWK)
-    monkeypatch.setattr(explore, "ENEMY_RESOLVER", lambda fid: enemy)
+    from eve_fit_mcp import goals
+    monkeypatch.setattr(goals, "ENEMY_RESOLVER", lambda fid: enemy)
     r = explore.sweep(nighthawk, {"low:3": ["Damage Control II", "Ballistic Control System II"]},
                       goals={"matchup:1@10": "max"}, include_eft=0)
     assert len(r["front"]) >= 1 and "matchup:1@10" in r["front"][0]["stats"]

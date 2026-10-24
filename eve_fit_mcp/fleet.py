@@ -175,9 +175,13 @@ def _order(strategy, our, their, raw, ehp, hp, tank, alive_their, our_dps_on):
     return sorted(alive_types, key=key)
 
 
-def simulate(our, their, dist, our_strategy="auto", their_strategy="auto"):
-    raw_us, ehp_t, hp_t, tank_t, tackle_t = _pair_tables(our, their, dist)
-    raw_them, ehp_u, hp_u, tank_u, tackle_u = _pair_tables(their, our, dist)
+def tables(our, their, dist):
+    """Both directions' pair tables (damage, EHP, tank, tackle) - reusable across kill orders."""
+    return _pair_tables(our, their, dist), _pair_tables(their, our, dist)
+
+
+def simulate(our, their, dist, our_strategy="auto", their_strategy="auto", precomputed=None):
+    (raw_us, ehp_t, hp_t, tank_t, tackle_t), (raw_them, ehp_u, hp_u, tank_u, tackle_u) =         precomputed or tables(our, their, dist)
     alive = {(m.label, i): True for side in (our, their) for m in side for i in range(m.count)}
     left = {(m.label, i): ehp_t[m.label] for m in their for i in range(m.count)}
     left.update({(m.label, i): ehp_u[m.label] for m in our for i in range(m.count)})
@@ -252,6 +256,13 @@ def simulate(our, their, dist, our_strategy="auto", their_strategy="auto"):
             break
     survivors = {"us": {m.label: sum(alive[(m.label, i)] for i in range(m.count)) for m in our},
                  "them": {m.label: sum(alive[(m.label, i)] for i in range(m.count)) for m in their}}
+
+    def destroyed(side, ehp):
+        total = sum(ehp[m.label] * m.count for m in side)
+        remaining = sum(max(0.0, left[(m.label, i)]) for m in side for i in range(m.count) if alive[(m.label, i)])
+        return round(1 - remaining / total, 4) if total else 0.0
+
+    ehp_destroyed = {"us": destroyed(our, ehp_u), "them": destroyed(their, ehp_t)}
     us_left, them_left = sum(survivors["us"].values()), sum(survivors["them"].values())
     if not them_left and us_left:
         winner = "us"
@@ -268,13 +279,92 @@ def simulate(our, their, dist, our_strategy="auto", their_strategy="auto"):
         if ev["side"] == "us" and ev["killed"] not in kill_order_used:
             kill_order_used.append(ev["killed"])
     return {"winner": winner, "duration_s": round(t), "timeline": timeline, "survivors": survivors,
-            "our_kill_order": kill_order_used, "target_switches": switches,
+            "our_kill_order": kill_order_used, "target_switches": switches, "ehp_destroyed": ehp_destroyed,
             "stalled": [s for s, v in stall.items() if v],
             "tackle_on_them": tackle_t, "tackle_on_us": tackle_u,
             "jams_on_us_at_start": {"%s #%d" % (k[0], k[1] + 1): round(v, 2)
                                     for k, v in _jams(their, our, {k: True for k in alive}, dist).items()},
             "ehp_vs_incoming": {"us": {k: round(v) for k, v in ehp_u.items()},
                                 "them": {k: round(v) for k, v in ehp_t.items()}}}
+
+
+def fleet_score(r, our, their):
+    """Scalar outcome for searches: 1 for a win (0.5 on points) + up to 0.2 for a fast win + share of the
+    enemy fleet's EHP destroyed - share of ours destroyed (partial damage counts). About -1 .. 2.2."""
+    ours_total = sum(m.count for m in our)
+    theirs_total = sum(m.count for m in their)
+    # EHP-weighted, including partial damage, so a close loss outranks a rout (gives searches a gradient)
+    killed = r["ehp_destroyed"]["them"]
+    lost = r["ehp_destroyed"]["us"]
+    win = 1.0 if r["winner"] == "us" else 0.5 if r["winner"].startswith("us") else 0.0
+    fast = 0.2 * max(0.0, 1 - r["duration_s"] / MAX_T) if r["winner"] == "us" else 0.0
+    return round(win + fast + killed - lost, 4)
+
+
+_ENEMY_CACHE = {}
+
+
+def enemy_members(doctrine, links=None):
+    """Members for a saved doctrine, built once per doctrine content (FitHandles are reused)."""
+    import json
+    d = doctrines.load(doctrine)
+    key = (json.dumps(d, sort_keys=True), json.dumps(links, sort_keys=True))
+    if key not in _ENEMY_CACHE:
+        _ENEMY_CACHE[key] = _members(doctrine, "All 5", links)
+    return _ENEMY_CACHE[key]
+
+
+class FleetObjective:
+    """Score a candidate fit as `count` copies (plus optional support ships) vs a saved doctrine.
+
+    calibrate() runs every kill-order strategy on a baseline fit and keeps the winners, so each candidate
+    is scored with those orders only (fast): the best score across them and, per range_choice, the best
+    range ("best": we pick the engagement range) or the average over ranges ("all": robust)."""
+
+    def __init__(self, doctrine, count=1, distances_km=(10,), support=None, range_choice="best",
+                 their_order="auto", links=None, their_links=None):
+        if range_choice not in ("best", "all"):
+            raise FitError("range_choice must be 'best' or 'all'")
+        self.doctrine, self.count, self.distances = doctrine, int(count), [float(d) for d in distances_km]
+        self.enemy = enemy_members(doctrine, their_links)
+        self.support = _members(support, "All 5", links) if support else []
+        for m in self.support:
+            m.label = "support " + m.label
+        self.range_choice, self.their_order, self.links = range_choice, their_order, links
+        self.orders = {d: ("auto", "ewar_first", "logi_first") for d in self.distances}
+
+    def calibrate(self, handle):
+        with lock():
+            for d in self.distances:
+                us = self._us(handle)
+                tb = tables(us, self.enemy, d * 1000)
+                runs = {s: simulate(us, self.enemy, d * 1000, s, self.their_order, tb) for s in STRATEGIES}
+                ranked = sorted(runs, key=lambda s: fleet_score(runs[s], us, self.enemy), reverse=True)
+                self.orders[d] = tuple(dict.fromkeys([ranked[0], ranked[1], "auto"]))
+        return self.orders
+
+    def _us(self, handle):
+        if self.links:
+            handle.set_command_links(self.links)
+        return [Member("candidate", handle, self.count)] + self.support
+
+    def __call__(self, handle):
+        with lock():
+            us = self._us(handle)
+            per = {}
+            for d in self.distances:
+                best = None
+                tb = tables(us, self.enemy, d * 1000)
+                for order in self.orders[d]:
+                    r = simulate(us, self.enemy, d * 1000, order, self.their_order, tb)
+                    sc = fleet_score(r, us, self.enemy)
+                    if best is None or sc > best[0]:
+                        best = (sc, order, r["winner"])
+                per[d] = best
+            scores = [v[0] for v in per.values()]
+            score = max(scores) if self.range_choice == "best" else sum(scores) / len(scores)
+            return {"score": score, "by_distance": {"%g" % d: {"score": v[0], "order": v[1], "winner": v[2]}
+                                                     for d, v in per.items()}}
 
 
 def _score(r, our):
@@ -303,7 +393,8 @@ def battle(our_side, their_side, distances_km=(10,), our_order="compare", their_
             for d in distances_km:
                 dist = float(d) * 1000
                 strategies = STRATEGIES if our_order == "compare" else (our_order,)
-                runs = {s: simulate(our, their, dist, s, their_order) for s in strategies}
+                tb = tables(our, their, dist)
+                runs = {s: simulate(our, their, dist, s, their_order, tb) for s in strategies}
                 best = max(runs, key=lambda s: _score(runs[s], our))
                 summary = {s: {"winner": r["winner"], "duration_s": r["duration_s"],
                                "our_losses": sum(m.count for m in our) - sum(r["survivors"]["us"].values()),

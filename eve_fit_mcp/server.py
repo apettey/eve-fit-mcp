@@ -10,7 +10,7 @@ import sys
 
 from mcp.server.mcpserver import MCPServer
 
-from . import ammo, catalog, doctrines, esi, evaluate, explore, fleet, items, matchup, optimizer, pilots, ships, skillplan, stats as stats_mod
+from . import ammo, catalog, counter, doctrines, esi, evaluate, explore, fleet, items, matchup, optimizer, pilots, ships, skillplan, stats as stats_mod
 from .fitting import FitError, FitHandle
 from .pyfa_bridge import ROOT, boot, on_engine
 
@@ -40,7 +40,8 @@ EVE Online fitting engine (Pyfa). Typical loop:
    state the loaded ammo + intent). matchup_fits / matchup_envelope vs enemy fits (both sides' scram/webs/
    painters modelled); sweep goal "matchup:<enemy fit_id>@<km>". Enemy comps: save_doctrine (eve-esi doctrine
    bundles from zKill/battle reports pass straight in), analyze_doctrine, matchup_vs_doctrine, and
-   fleet_battle (fleet vs comp: logi, ECM, tackle, focus fire, best kill order per range).
+   fleet_battle (fleet vs comp: logi, ECM, tackle, focus fire, best kill order per range), and
+   counter_fit (search a hull's fit to beat a doctrine; before/after battles and trade-off alternatives).
 6. save_fit writes .eft (clipboard import) + .xml (file import; Pyfa mangles .eft files) to fits/.
    skill_plan: minimum training plan for one or more fits (EVEMon .emp export).
 Rules of thumb: start from a valid fit; make must-haves constraints or locked slots, not weights;
@@ -55,7 +56,8 @@ EHP uses the fit's damage profile; ehp_vs_<type> gives each damage type. Full gu
 
 mcp = MCPServer("eve-fit", instructions=INSTRUCTIONS)
 _fits = {}
-explore.ENEMY_RESOLVER = lambda fid: _get(fid)
+from . import goals as _goals  # noqa: E402
+_goals.ENEMY_RESOLVER = lambda fid: _get(fid)
 
 
 def _quiet(fn):
@@ -492,6 +494,30 @@ def fleet_battle(our_fleet: list[dict] | str, enemy: str | list[dict], distances
     best. Returns winner, kill timeline, survivors, jams, tackle, target switches, the orders compared and
     insights (e.g. "kill the Falcon first", "can't break the Basilisks while 2 are alive")."""
     return fleet.battle(our_fleet, enemy, distances_km or [10], our_order, their_order, our_links, their_links)
+
+
+@_tool
+def counter_fit(fit_id: int, doctrine: str, count: int = 1, distances_km: list[float] | None = None,
+                racks: dict[str, list[str | None]] | None = None, mode: str = "sweep",
+                locked: list[str] | None = None, support: list[dict] | None = None, range_choice: str = "best",
+                constraints: dict | None = None, max_evals: int = 1500, time_limit_s: float = 600) -> dict:
+    """Search for the fit of this hull that does best in a fleet battle against a saved doctrine, with the
+    fit's pilot skills. `count` copies of the candidate fly together with optional `support` ships
+    ([{"fit_id"|"eft", "count", "label"}], e.g. your logi) at `distances_km`.
+
+    mode "sweep": exhaustive over racks pools, e.g. {"low": ["Ballistic Control System II", "Damage Control II"],
+    "med:5": ["Stasis Webifier II", "Sensor Booster II"]} (keep pools small: ~0.13 s per candidate fight).
+    mode "greedy": the optimiser over racks/pools (larger spaces). Kill orders are calibrated on the starting
+    fit first. range_choice "best" = we pick the engagement range, "all" = average over the ranges.
+    Score: 1 win (0.5 on points) + up to 0.2 for a fast win + share of enemy EHP destroyed - share of ours.
+    Returns the counter fit (as a new fit_id), module changes, stat deltas, before/after battles with kill
+    orders and insights, and the score/DPS/EHP alternatives. Keeps the original if nothing beats it."""
+    res = counter.counter_fit(_get(fit_id), doctrine, count, distances_km or [10], racks, mode, locked or (),
+                              support, range_choice, constraints, max_evals, time_limit_s)
+    h = res.pop("handle")
+    _register(h)
+    res["fit_id"] = h.id
+    return res
 
 
 @_tool

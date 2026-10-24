@@ -196,8 +196,10 @@ def compute(handle, skills_check=False, noprop=False):
                 issues.append("%s is offline" % mod.item.typeName)
         for name, n in sorted(getattr(handle, "import_dropped", {}).items()):
             issues.append("%d x %s in the EFT could not be fitted (no free slot/hardpoint) and was dropped" % (n, name))
+        for old, new in sorted(getattr(handle, "import_renamed", {}).items()):
+            issues.append("note: %s no longer exists in game data; Pyfa uses %s instead" % (old, new))
         s["issues"] = issues
-        s["valid"] = not any(not i.endswith("is offline") for i in issues)
+        s["valid"] = not any(not (i.endswith("is offline") or i.startswith("note: ")) for i in issues)
         if skills_check:
             s["missing_skills"] = pilots.missing_skills(fit)
         if noprop:

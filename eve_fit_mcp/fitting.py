@@ -22,6 +22,24 @@ def get_item(name_or_id):
     return item
 
 
+def eft_renamed_items(eft):
+    """{name as written: current name} for items Pyfa maps to a different item (removed/renamed in game data,
+    e.g. old ECCM modules became Sensor Boosters)."""
+    import re
+    out = {}
+    for line in eft.strip().splitlines()[1:]:
+        line = line.strip()
+        if not line or line.startswith("["):
+            continue
+        name = re.sub(r"\s+x\d+\s*$", "", re.sub(r"\s*\[\d+\]\s*$", "", line))
+        name = re.sub(r"\s*/offline\s*$", "", name, flags=re.I)
+        for part in [p.strip() for p in name.split(",")][:2]:
+            item = P.market.getItem(part) if part else None
+            if item is not None and item.typeName.lower() != part.lower():
+                out[part] = item.typeName
+    return out
+
+
 def eft_module_counts(eft):
     """Counter of fitted-module/subsystem names listed in an EFT (no drones, cargo, implants)."""
     import re
@@ -93,6 +111,7 @@ class FitHandle:
             fitted = Counter((m.baseItem if m.isMutated else m.item).typeName
                              for m in fit.modules if not m.isEmpty)
             self.import_dropped = dict(eft_module_counts(eft) - fitted)
+            self.import_renamed = eft_renamed_items(eft)
             self.recalc()
             if drones_active:
                 self.auto_drones = True
