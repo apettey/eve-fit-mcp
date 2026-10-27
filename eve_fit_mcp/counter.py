@@ -18,10 +18,27 @@ COMPARE_KEYS = ["dps_total", "volley", "ehp_total", "ehp_vs_em", "ehp_vs_thermal
 
 
 def _changes(before, after):
+    from collections import Counter
     b, a = before.slots_by_key(), after.slots_by_key()
+
+    def fitted(slots, k):
+        return slots[k]["item"], slots[k]["charge"]
+
+    # modules that only moved between slots of the same rack aren't changes
+    removed, added = {}, {}
+    for k in b:
+        if k in a:
+            rack = k.split(":")[0]
+            removed.setdefault(rack, Counter())[fitted(b, k)] += 1
+            added.setdefault(rack, Counter())[fitted(a, k)] += 1
+    for rack in removed:
+        removed[rack], added[rack] = removed[rack] - added[rack], added[rack] - removed[rack]
     out = []
     for k in b:
-        if k in a and (b[k]["item"], b[k]["charge"]) != (a[k]["item"], a[k]["charge"]):
+        rack = k.split(":")[0]
+        if k in a and fitted(b, k) != fitted(a, k) and removed[rack][fitted(b, k)] and added[rack][fitted(a, k)]:
+            removed[rack][fitted(b, k)] -= 1
+            added[rack][fitted(a, k)] -= 1
             out.append({"slot": k, "from": b[k]["item"] + (", " + b[k]["charge"] if b[k]["charge"] else "")
                         if b[k]["item"] else None,
                         "to": a[k]["item"] + (", " + a[k]["charge"] if a[k]["charge"] else "") if a[k]["item"] else None})

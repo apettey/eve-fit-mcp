@@ -70,3 +70,11 @@ def test_renamed_items_are_noted():
 def test_counter_fit_needs_racks_for_sweep(enemy):
     with pytest.raises(FitError, match="racks"):
         counter.counter_fit(FitHandle(NIGHTHAWK), enemy, mode="sweep")
+
+
+def test_changes_ignore_modules_that_only_moved():
+    from eve_fit_mcp.counter import _changes
+    from eve_fit_mcp.fitting import FitHandle
+    a = FitHandle("[Caracal, a]\nDamage Control II\nBallistic Control System II\n\nLarge Shield Extender II\nWarp Scrambler II\n")
+    b = FitHandle("[Caracal, b]\nBallistic Control System II\nDamage Control II\n\nLarge Shield Extender II\nLarge Shield Extender II\n")
+    assert _changes(a, b) == [{"slot": "med:1", "from": "Warp Scrambler II", "to": "Large Shield Extender II"}]
