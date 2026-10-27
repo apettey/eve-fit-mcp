@@ -53,6 +53,9 @@ Slots are addressed as 'high:0', 'med:1', 'low:2', 'rig:0', 'subsystem:1'. Metri
 Pilots: 'All 5' (default) .. 'All 0', custom skill sets (save_pilot), imported skills (set_pilot_skills)
 or esi_login. With a pilot below All 5 the optimiser only picks modules/ammo the pilot can use.
 Command boosts: generic links per fit (list_command_links, set_fit_options command_links).
+Fitted Command Bursts: a hull runs 1 (more on Command Ships/capitals) plus 1 per Command Processor RIG
+(command_bursts / command_bursts_max; over the limit = invalid). A ship's own bursts boost itself, so
+max_speed etc. include e.g. Rapid Deployment; one burst per charge type (duplicates don't stack).
 EHP uses the fit's damage profile; ehp_vs_<type> gives each damage type. Full guide: docs/AGENT_GUIDE.md."""
 
 mcp = MCPServer("eve-fit", instructions=INSTRUCTIONS)

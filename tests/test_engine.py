@@ -110,3 +110,39 @@ def test_optimizer_respects_constraints(rifter):
                              pools={"low": ["Overdrive Injector System II", "Gyrostabilizer II"]}, time_limit_s=60)
     assert res["feasible"]
     assert res["stats"]["max_speed"] >= 3500
+
+
+STORK_LINKS = """[Stork, links]
+Federation Navy 400mm Steel Plates
+Multispectrum Coating II
+
+5MN Y-T8 Compact Microwarpdrive
+
+Information Command Burst II, Electronic Superiority Charge
+Skirmish Command Burst II, Rapid Deployment Charge
+Skirmish Command Burst II, Rapid Deployment Charge
+
+%s
+"""
+
+
+def test_command_burst_limit_needs_processor_rigs():
+    bare = stats.compute(FitHandle(STORK_LINKS % ""))
+    assert not bare["valid"]
+    assert bare["command_bursts"] == 3 and bare["command_bursts_max"] == 1
+    assert any("Command Burst modules online but this fit can only run 1" in i for i in bare["issues"])
+
+    rigged = stats.compute(FitHandle(STORK_LINKS % "Small Command Processor I\nSmall Command Processor I"))
+    assert rigged["valid"], rigged["issues"]
+    assert rigged["command_bursts_max"] == 3
+    notes = [i for i in rigged["issues"] if i.startswith("note: ")]
+    assert any("Rapid Deployment Charge; the same buff doesn't stack" in n for n in notes)
+    assert any("boost itself" in n for n in notes)
+
+
+def test_own_rapid_deployment_boosts_own_speed():
+    h = FitHandle(STORK_LINKS % "Small Command Processor I\nSmall Command Processor I")
+    boosted = stats.compute(h)["max_speed"]
+    for key in ("high:1", "high:2"):
+        h.set_module(key, "Skirmish Command Burst II", charge=None)
+    assert stats.compute(h)["max_speed"] < boosted * 0.9

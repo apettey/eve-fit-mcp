@@ -53,6 +53,9 @@ METRICS = {
     "remote_rep": "Outgoing remote repair HP/s",
     "mining_yield": "Mining yield m3/s",
     "cpu_free": "Spare CPU tf", "pg_free": "Spare powergrid MW", "calibration_free": "Spare calibration",
+    "command_bursts": "Active Command Bursts",
+    "command_bursts_max": "Bursts this fit may run at once (hull base, +1 per Command Processor rig); "
+                          "only present when a burst is fitted",
 }
 
 
@@ -194,6 +197,13 @@ def compute(handle, skills_check=False, noprop=False):
                 issues.append("%s cannot load %s" % (mod.item.typeName, mod.charge.typeName))
             if mod.state == P.FittingModuleState.OFFLINE:
                 issues.append("%s is offline" % mod.item.typeName)
+        issues.extend(_group_limits(fit))
+        bursts = [m for m in fit.modules if not m.isEmpty and m.item.group.name == "Command Burst"
+                  and m.state >= P.FittingModuleState.ACTIVE]
+        s["command_bursts"] = float(len(bursts))
+        if bursts:
+            s["command_bursts_max"] = float(bursts[0].getModifiedItemAttr("maxGroupActive") or 0)
+            issues.extend(_burst_notes(bursts))
         for name, n in sorted(getattr(handle, "import_dropped", {}).items()):
             issues.append("%d x %s in the EFT could not be fitted (no free slot/hardpoint) and was dropped" % (n, name))
         for old, new in sorted(getattr(handle, "import_renamed", {}).items()):
@@ -205,6 +215,47 @@ def compute(handle, skills_check=False, noprop=False):
         if noprop:
             s.update(_noprop(handle))
         return s
+
+
+def _group_limits(fit):
+    """maxGroupOnline / maxGroupActive: how many modules of one group may be online / active at once.
+    EFT import sets every module active without checking these, so a fit can look valid while the game
+    would refuse to run part of it (most often Command Bursts)."""
+    issues = []
+    groups = {}
+    for m in fit.modules:
+        if not m.isEmpty and m.state >= P.FittingModuleState.ONLINE:
+            groups.setdefault(m.item.group.name, []).append(m)
+    for group, mods in sorted(groups.items()):
+        for attr, state, word in (("maxGroupOnline", P.FittingModuleState.ONLINE, "online"),
+                                  ("maxGroupActive", P.FittingModuleState.ACTIVE, "active")):
+            limit = mods[0].getModifiedItemAttr(attr)
+            n = sum(1 for m in mods if m.state >= state)
+            if limit and n > limit:
+                msg = "%d %s modules %s but this fit can only run %d" % (n, group, word, int(limit))
+                if group == "Command Burst":
+                    msg += " (each Command Processor rig adds 1)"
+                issues.append(msg)
+                break  # online over the limit implies active over it too
+    return issues
+
+
+def _burst_notes(bursts):
+    """Non-blocking notes on active Command Bursts: duplicate charges and self-boosting."""
+    notes = []
+    charges = {}
+    for m in bursts:
+        if m.charge is None:
+            notes.append("note: %s has no charge loaded and does nothing" % m.item.typeName)
+        else:
+            charges[m.charge.typeName] = charges.get(m.charge.typeName, 0) + 1
+    for name, n in sorted(charges.items()):
+        if n > 1:
+            notes.append("note: %d bursts load %s; the same buff doesn't stack, so only one counts" % (n, name))
+    if charges:
+        notes.append("note: this ship's own bursts (%s) also boost itself, so stats such as max_speed include "
+                     "them; unload the charges to see unboosted numbers" % ", ".join(sorted(charges)))
+    return notes
 
 
 def _noprop(handle):

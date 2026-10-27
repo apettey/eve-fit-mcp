@@ -115,6 +115,24 @@ Hurricane Fleet Issue killmail review): what they had to hand-write, and where t
   recommending HAMs or drones into a battleship brawl. Long range shrinks the share of the flight inside
   the field but never removes it, since the missiles must reach the target.
 - **Bursts need charges**: a Command Burst without a charge does nothing in the fleet model or Pyfa.
+- **How many bursts a fit can run**: most hulls, Command Destroyers included, run **1** Command Burst at a
+  time. Command Ships and capitals get more from their hull. Each **Command Processor I** adds 1. It is a
+  **rig** (Small/Medium/Large/Capital, 150 calibration), not a mid or high slot module. So a Stork with
+  3 bursts needs both its rig slots for Command Processors, which leaves no rig for speed or tank.
+  `command_bursts` and `command_bursts_max` report the count and the limit, and going over the limit makes
+  the fit invalid. EFT import switches every burst on, so check this rather than trusting that all of them
+  run. Find the rig with `find_items(tags=["command:extra-burst"])`.
+- **Bursts cost a lot of CPU**: about 50–55 tf each (T2 55, T1 and faction 50). Three bursts on a destroyer
+  use about half its CPU, so CPU, not slots, usually limits a link ship. Look for low-CPU module variants
+  (compact damps, for example) before giving up tank for Co-Processors.
+- **Own bursts boost the ship itself**: a fit's active bursts apply to that ship too. `max_speed` already
+  includes its own Rapid Deployment, and lock range includes Sensor Optimization. When a user asks for a
+  speed "cold" or unboosted, unload the charges (`set_charge(fit_id, ["high:1"], null)`) and quote both numbers. `issues`
+  says this in a `note:`.
+- **One burst per charge type**: two bursts loaded with the same charge don't stack, and only one counts.
+  Each burst type has 3–4 charges (Information: Sensor Optimization, Electronic Superiority, Electronic
+  Hardening). Pick charges per fleet role, e.g. Electronic Superiority boosts the fleet's ewar, including a
+  damp ship's own damps.
 - **Cap warfare**: a fit that isn't cap stable alone is assumed kept stable by its fleet until neuts land;
   only the neuts' drain decides the cap-out time.
 - **Units**: resists are fractions (0.6 = 60%). `weapon_tracking` is Pyfa's raw turret tracking attribute.
