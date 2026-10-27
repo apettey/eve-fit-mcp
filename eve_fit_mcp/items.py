@@ -16,7 +16,7 @@ import re
 from .errors import FitError
 from .pyfa_bridge import DATA_DIR, P, lock
 
-INDEX_VERSION = 4  # bump when tagging logic changes
+INDEX_VERSION = 5  # bump when tagging logic changes
 INDEX_PATH = os.path.join(DATA_DIR, "item_index.json")
 CATEGORIES = ("Module", "Charge", "Drone", "Implant", "Subsystem", "Fighter", "Ship", "Structure Module")
 
@@ -125,6 +125,7 @@ NAME_TAGS = [
     ("Low Friction Nozzle", "agility"), ("Dynamic Fuel Valve", "propulsion cap"),
     ("Engine Thermal Shielding", "propulsion overheat"), ("Hyperspatial Velocity", "warp-speed"),
     ("Ancillary Current Router", "fitting powergrid"), ("Processor Overclocking", "fitting cpu"),
+    ("Command Processor", "command command:extra-burst"),
     ("Capacitor Control Circuit", "cap"), ("Semiconductor Memory Cell", "cap"),
     ("Egress Port Maximizer", "cap"), ("Powergrid Subroutine", "fitting powergrid"),
     ("Trimark Armor Pump", "tank tank:armor-buffer"), ("Auxiliary Nano Pump", "tank tank:armor-active"),
